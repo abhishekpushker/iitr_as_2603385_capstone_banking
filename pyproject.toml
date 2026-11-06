@@ -83,7 +83,7 @@ source = ["credagent", "dataset"]
 data_file = "/tmp/.coverage"
 
 [tool.coverage.report]
-fail_under = 80
+fail_under = 90  # combined; line ≥ 90 and branch ≥ 85 are checked by scripts/coverage_gate.py
 show_missing = true
 skip_covered = true
 exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "if __name__ == .__main__.:"]

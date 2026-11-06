@@ -77,8 +77,9 @@ test-unit: ## unit layer (sockets disabled)
 test-contract: ## contract layer (sockets disabled)
 	$(RUN_TESTS) pytest -m contract $(SOCKET_OFF)
 
-test-unit-contract: ## unit + contract with coverage (the gate's step 3)
-	$(RUN_TESTS) pytest -m "unit or contract" $(SOCKET_OFF) --cov --cov-report=term-missing:skip-covered
+test-unit-contract: ## unit + contract with coverage; line ≥ 90 % and branch ≥ 85 % (gate steps 3 + 9)
+	$(RUN_TESTS) sh -c 'pytest -m "unit or contract" $(SOCKET_OFF) --cov --cov-report=term-missing:skip-covered \
+	  && coverage json -q -o /tmp/coverage.json && python -m scripts.coverage_gate /tmp/coverage.json'
 
 test-integration: ## integration layer (chroma up)
 	ci/run_layer.sh integration chroma
@@ -100,6 +101,7 @@ offline-proof: ## egress probe from the backend network (+ graded scripts as the
 	$(RUN_TOOLS) python -m scripts.offline_probe
 	$(COMPOSE) run --rm -T indexer
 	$(RUN_TOOLS) python -m scripts.validate_dataset
+	$(RUN_TOOLS) python -m scripts.calibrate_threshold --out /tmp/retrieval.json
 	$(RUN_TOOLS) python -m scripts.make_transcripts --out /tmp/transcripts
 
 image-size: ## print image sizes (recorded in docs/DECISIONS.md)
@@ -125,10 +127,13 @@ transcripts: index ## regenerate transcripts/ in the runner (backend network onl
 	  -e IMAGE_ID="$$(docker image inspect --format '{{.Id}}' credagent:runtime)" \
 	  runner python -m scripts.make_transcripts
 
-bless: transcripts ## regenerate and overwrite every committed artifact (review the diff!)
+calibrate: index ## measure calibration similarities on both collections → config/retrieval.json
+	$(RUN_TOOLS) python -m scripts.calibrate_threshold
+
+bless: calibrate transcripts ## regenerate and overwrite every committed artifact (review the diff!)
 	@git status --short -- transcripts config eval/results
 
-eval calibrate eval-chunking demo: ## generators (land in Phases 2–11)
+eval eval-chunking demo: ## generators (land in Phases 4–11)
 	@echo "make $@: not implemented yet (see docs/IMPLEMENTATION_PLAN.md §4)"; exit 1
 
 clean-volumes: ## down -v (fresh chroma/log volumes), keep images — the gate's cold rerun

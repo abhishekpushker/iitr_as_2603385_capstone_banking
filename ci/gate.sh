@@ -19,7 +19,7 @@ step 5  "e2e";                                  ci/run_layer.sh e2e api-offline
 step 6  "security";                             ci/run_layer.sh security
 step 7  "golden";                               ci/run_layer.sh golden chroma indexer
 step 8  "offline proof";                        make --no-print-directory offline-proof
-step 9  "coverage threshold";                   echo "enforced in step 3 (pyproject fail_under)"
+step 9  "coverage threshold";                   echo "enforced in step 3 (line ≥ 90 %, branch ≥ 85 %: scripts/coverage_gate.py)"
 step 10 "cold volume: down -v, rerun [4]–[5]"
 make --no-print-directory clean-volumes
 ci/run_layer.sh integration chroma

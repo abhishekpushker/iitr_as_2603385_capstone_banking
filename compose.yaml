@@ -73,6 +73,7 @@ services:
     profiles: [tools]
     user: "${HOST_UID:-10001}:${HOST_GID:-10001}"
     volumes:
+      - ./config:/app/config
       - ./transcripts:/app/transcripts
       - ./eval/results:/app/eval/results
       - logs:/data/logs
