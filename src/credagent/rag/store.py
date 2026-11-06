@@ -32,6 +32,7 @@ class RetrievedChunk(BaseModel):
     text: str
     similarity: float
     rank: int
+    char_start: int  # offset of the chunk in its document body (orders extracted sentences)
 
 
 def connect_http(
@@ -129,6 +130,7 @@ class VectorStore:
                 text=doc,
                 similarity=1.0 - dist,
                 rank=rank,
+                char_start=int(meta["char_start"]),
             )  # fmt: skip
             for rank, (cid, doc, meta, dist) in enumerate(rows, start=1)
         ]

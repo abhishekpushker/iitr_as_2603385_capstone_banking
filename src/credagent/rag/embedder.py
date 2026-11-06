@@ -10,6 +10,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Protocol
 
 import torch
 from sentence_transformers import SentenceTransformer
@@ -17,6 +18,12 @@ from sentence_transformers import SentenceTransformer
 from credagent.settings import get_settings
 
 EMBEDDING_DIM = 384
+
+
+class Encoder(Protocol):
+    """What the indexer and the retriever need from an embedder (fakes in unit tests)."""
+
+    def encode(self, texts: Sequence[str]) -> list[list[float]]: ...
 
 
 class Embedder:

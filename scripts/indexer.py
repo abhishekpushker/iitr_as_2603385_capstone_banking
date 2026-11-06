@@ -13,18 +13,13 @@ import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
 
 from credagent.kb.chunking import STRATEGIES, Chunk, Strategy, chunk_document, chunk_params
 from credagent.kb.loader import KbDocument, load_kb
 from credagent.kb.version import kb_version
-from credagent.rag.embedder import get_embedder
+from credagent.rag.embedder import Encoder, get_embedder
 from credagent.rag.store import Metadata, VectorStore, connect_http
 from credagent.settings import Settings, get_settings
-
-
-class Encoder(Protocol):
-    def encode(self, texts: Sequence[str]) -> list[list[float]]: ...
 
 
 @dataclass(frozen=True)

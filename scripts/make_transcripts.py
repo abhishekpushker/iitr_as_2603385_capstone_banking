@@ -16,13 +16,19 @@ from typing import get_args
 
 import dataset
 from credagent import text
+from credagent.cache.response_cache import normalize_query
 from credagent.kb.chunking import FIXED_PARAMS, STRATEGIES, Chunk, chunk_document, chunk_params
 from credagent.kb.loader import DISCLAIMER, KbDocument, load_kb
 from credagent.kb.version import kb_version
+from credagent.llm.engine import MockEngine
+from credagent.observability.metrics import Metrics
+from credagent.rag import calibration as cal
 from credagent.rag.embedder import get_embedder
+from credagent.rag.generator import GroundedGenerator
+from credagent.rag.retriever import Retriever, collections_from_settings
 from credagent.rag.store import VectorStore, connect_http
-from credagent.schemas import LoanCategory, LoanStatus
-from credagent.settings import get_settings
+from credagent.schemas import FALLBACK_ANSWER, LoanCategory, LoanStatus
+from credagent.settings import Settings, get_settings
 from scripts import validate_dataset
 from scripts.indexer import CollectionNames
 from scripts.transcript_kit import Transcript
@@ -343,11 +349,265 @@ def chunking_and_index(t: Transcript) -> None:
         )
 
 
+# Task-4 demo set (§ARCH 7.5), disjoint from the calibration queries (test_query_sets.py).
+DEMO_IN_SCOPE: tuple[tuple[str, str], ...] = (
+    ("What is the annual fee on the credit card and when is it waived?", "kb-03-credit-card-fees"),
+    ("Within how many days must I report an unauthorised transaction for zero liability?",
+     "kb-05-fraud-dispute"),
+    ("Can I close my account if I still have dues?", "kb-06-account-closure"),
+    ("What interest rate does a personal loan carry for a credit score above 800?",
+     "kb-07-interest-rate-slabs"),
+    ("Is there a penalty for prepaying a home loan?", "kb-08-prepayment-penalty"),
+)  # fmt: skip
+DEMO_OUT_OF_SCOPE = "Can I get travel insurance with my card?"
+# §ARCH 7.12.3: Phase 3 verifies that this near-domain question falls below the threshold.
+GROUNDEDNESS_DEMO_QUERY = "What is the gold-loan late payment penalty?"
+
+
+def _retriever(s: Settings) -> Retriever:
+    client = connect_http(
+        s.chroma_host, s.chroma_port, attempts=s.chroma_connect_attempts,
+        backoff_cap_s=s.chroma_backoff_cap_s,
+    )  # fmt: skip
+    return Retriever(
+        VectorStore(client), get_embedder(), collections_from_settings(s), top_k=s.top_k,
+        metrics=Metrics(),
+    )  # fmt: skip
+
+
+def threshold_calibration(t: Transcript) -> None:
+    s = t.settings
+    retriever = _retriever(s)
+    results = cal.calibrate(retriever, top_k=s.top_k)
+    gated = results[cal.GATED_STRATEGY]
+
+    t.section("Inputs")
+    t.para(
+        f"{len(cal.IN_SCOPE_QUERIES)} in-scope and {len(cal.OUT_OF_SCOPE_QUERIES)} out-of-scope "
+        "calibration queries (`credagent.rag.calibration`), each embedded with "
+        f"`{s.embed_model_path.name}` and sent through the production `Retriever` "
+        f"(top-{s.top_k}, cosine) against **both** collections. Per collection: "
+        "`max_oos` = highest out-of-scope top-1, `min_in` = lowest in-scope top-1, "
+        "`gap = min_in − max_oos`, `threshold = round((max_oos + min_in) / 2, 3)`. "
+        f"Gate: `gap ≥ {cal.MIN_GAP}` on `{cal.GATED_STRATEGY}` (the collection expected to be "
+        f"deployed; Phase 4 confirms it). `kb_version = {kb_version(s.kb_dir)}`."
+    )
+
+    for strategy, c in results.items():
+        t.section(f"Measured top-1 similarity — `{c.collection}` ({strategy})")
+        rows: list[list[str]] = [
+            ["in-scope", m.query, f"{m.top1_similarity:.3f}", f"`{m.top1_doc_id}`",
+             "✔" if m.top1_doc_id == m.expected_doc_id else f"✘ (expected `{m.expected_doc_id}`)"]
+            for m in sorted(c.in_scope, key=lambda m: -m.top1_similarity)
+        ] + [
+            ["out-of-scope", m.query, f"{m.top1_similarity:.3f}", f"`{m.top1_doc_id}`", "—"]
+            for m in sorted(c.out_of_scope, key=lambda m: -m.top1_similarity)
+        ]  # fmt: skip
+        t.table(["kind", "query", "top-1 sim", "top-1 doc", "doc correct"], rows)
+
+    t.section("Gap and threshold")
+    t.table(
+        ["collection", "max_oos", "min_in", "gap", "threshold", f"gap ≥ {cal.MIN_GAP}"],
+        [
+            [
+                f"`{c.collection}`",
+                f"{c.max_oos:.3f}",
+                f"{c.min_in:.3f}",
+                f"{c.gap:.3f}",
+                "—" if c.threshold is None else f"{c.threshold:.3f}",
+                "✔" if c.meets_min_gap else "✘",
+            ]
+            for c in results.values()
+        ],
+    )
+    t.para(
+        f"Deployed threshold: **{gated.threshold}** on `{gated.collection}`. A query whose top-1 "
+        f'similarity is below it is answered with "{FALLBACK_ANSWER}"'
+    )
+
+    t.section("Near-domain verification for the groundedness demo (§ARCH 7.12.3)")
+    probe = retriever.retrieve(GROUNDEDNESS_DEMO_QUERY, cal.GATED_STRATEGY)
+    probe_top = probe.chunks[0].doc_id if probe.chunks else None
+    margin = (gated.threshold or 0.0) - probe.top1_similarity
+    t.para(
+        f"**{GROUNDEDNESS_DEMO_QUERY}** → top-1 {probe.top1_similarity:.3f} (`{probe_top}`) "
+        f"vs threshold {gated.threshold}, margin {margin:.3f}."
+    )
+
+    committed = s.retrieval_config_path.read_text(encoding="utf-8")
+    rendered = cal.dumps_config(
+        cal.build_config(
+            results,
+            kb_version=kb_version(s.kb_dir),
+            top_k=s.top_k,
+            chunk_params=chunk_params(),
+            embed_model=s.embed_model_path.name,
+        )
+    )
+    t.section("`config/retrieval.json`")
+    t.code(committed, "json")
+
+    demo = {normalize_query(q) for q, _ in DEMO_IN_SCOPE} | {
+        normalize_query(q) for q in (DEMO_OUT_OF_SCOPE, GROUNDEDNESS_DEMO_QUERY, SAMPLE_QUERY)
+    }
+    calib = {normalize_query(q.query) for q in cal.IN_SCOPE_QUERIES} | {
+        normalize_query(q) for q in cal.OUT_OF_SCOPE_QUERIES
+    }
+    t.check(
+        f"≥ 5 in-scope calibration queries ({len(cal.IN_SCOPE_QUERIES)})",
+        len(cal.IN_SCOPE_QUERIES) >= 5,
+    )
+    t.check(
+        f"≥ 5 out-of-scope calibration queries ({len(cal.OUT_OF_SCOPE_QUERIES)})",
+        len(cal.OUT_OF_SCOPE_QUERIES) >= 5,
+    )
+    t.check(
+        "both collections measured for every query",
+        all(
+            len(c.in_scope) == len(cal.IN_SCOPE_QUERIES)
+            and len(c.out_of_scope) == len(cal.OUT_OF_SCOPE_QUERIES)
+            for c in results.values()
+        ),
+    )
+    t.check(
+        f"`{gated.collection}`: max_oos {gated.max_oos:.3f} < threshold {gated.threshold} "
+        f"< min_in {gated.min_in:.3f}",
+        gated.threshold is not None and gated.max_oos < gated.threshold < gated.min_in,
+    )
+    t.check(f"`{gated.collection}`: gap {gated.gap:.3f} ≥ 0.05", gated.gap >= 0.05)
+    t.check(
+        f"`{gated.collection}`: every in-scope query retrieves its document first "
+        f"({gated.in_scope_top1_correct}/{len(gated.in_scope)})",
+        gated.in_scope_top1_correct == len(gated.in_scope),
+    )
+    t.check(
+        "calibration queries are disjoint from the demo and sample queries", calib.isdisjoint(demo)
+    )
+    t.check(
+        "`config/retrieval.json` equals a fresh calibration byte for byte", committed == rendered
+    )
+    t.check(
+        f"groundedness demo query is below the threshold ({probe.top1_similarity:.3f} < "
+        f"{gated.threshold})",
+        gated.threshold is not None and probe.top1_similarity < gated.threshold,
+    )
+
+
+def grounded_generation(t: Transcript) -> None:
+    s = t.settings
+    config = cal.load_retrieval_config(s.retrieval_config_path)
+    strategy = config.gated_strategy
+    generator = GroundedGenerator(
+        _retriever(s),
+        MockEngine(),
+        strategy=strategy,
+        threshold=config.threshold_for(strategy),
+        top_k=config.top_k,
+        metrics=Metrics(),
+    )
+    engine = MockEngine()
+
+    t.section("Inputs")
+    t.para(
+        f"Collection `{strategy}`, threshold **{generator.threshold}** and top-{generator.top_k} "
+        "from `config/retrieval.json`. `GroundedGenerator` → `MockEngine.generate_grounded` "
+        "(§ARCH 7.5): below the threshold → fallback; otherwise the retrieved chunks are split "
+        "into sentences and deduplicated, each sentence is scored "
+        "`0.7·query-token recall + 0.3·chunk similarity`, and the best 2 with score ≥ 0.3 are "
+        "emitted verbatim in document order. The support rule (§ARCH 7.8: token recall ≥ 0.6 "
+        "against the best context sentence and every number present in the context) is "
+        "re-applied to every answer."
+    )
+
+    cases = [(q, d, True) for q, d in DEMO_IN_SCOPE] + [(DEMO_OUT_OF_SCOPE, None, False)]
+    for n, (query, expected_doc, in_scope) in enumerate(cases, start=1):
+        retrieval = generator.retrieve(query)
+        answer = generator.generate(query, retrieval)
+        context = [c.text for c in retrieval.chunks]
+        support = engine.support_report(answer.answer, context)
+        label = "in-scope" if in_scope else "out-of-scope"
+
+        t.section(f"Q{n} ({label}): {query}")
+        t.table(
+            ["rank", "similarity", "doc_id", "chunk_id", "text"],
+            [
+                [c.rank, f"{c.similarity:.3f}", f"`{c.doc_id}`", f"`{c.chunk_id}`", c.text]
+                for c in retrieval.chunks
+            ],
+        )
+        t.para(
+            f"top-1 {answer.top1_similarity:.3f} "
+            f"{'≥' if answer.top1_similarity >= generator.threshold else '<'} threshold "
+            f"{generator.threshold} → `grounded={answer.grounded}`"
+        )
+        t.para(f"**Answer:** {answer.answer}")
+        t.para(
+            "**Sources:** "
+            + (", ".join(f"`{r.chunk_id}` ({r.similarity:.3f})" for r in answer.sources) or "none")
+        )
+        if in_scope:
+            t.table(
+                ["answer sentence", "best-match recall", "numbers missing", "supported"],
+                [
+                    [
+                        x.sentence,
+                        f"{x.recall:.2f}",
+                        ", ".join(x.numbers_missing) or "—",
+                        "✔" if x.supported else "✘",
+                    ]
+                    for x in support.sentences
+                ],
+            )
+            sentences = {x for c in context for x in text.split_sentences(c)}
+            t.check(
+                f"Q{n}: grounded, non-fallback answer",
+                answer.grounded and answer.answer != FALLBACK_ANSWER,
+            )
+            t.check(
+                f"Q{n}: top-1 document is `{expected_doc}`",
+                bool(retrieval.chunks) and retrieval.chunks[0].doc_id == expected_doc,
+            )
+            t.check(
+                f"Q{n}: every answer sentence is verbatim from the retrieved context",
+                set(text.split_sentences(answer.answer)) <= sentences,
+            )
+            t.check(
+                f"Q{n}: no answer sentence repeats",
+                len(set(text.split_sentences(answer.answer)))
+                == len(text.split_sentences(answer.answer)),
+            )
+            t.check(
+                f"Q{n}: support rule holds for {support.supported_count}/{support.total} sentences",
+                support.total > 0 and support.all_supported,
+            )
+            t.check(
+                f"Q{n}: sources are retrieved chunks",
+                bool(answer.sources)
+                and {r.chunk_id for r in answer.sources} <= {c.chunk_id for c in retrieval.chunks},
+            )
+        else:
+            t.check(
+                f"Q{n}: top-1 {answer.top1_similarity:.3f} is below the threshold",
+                answer.top1_similarity < generator.threshold,
+            )
+            t.check(
+                f'Q{n}: answer is exactly "{FALLBACK_ANSWER}"', answer.answer == FALLBACK_ANSWER
+            )
+            t.check(
+                f"Q{n}: `grounded=False` and no sources",
+                not answer.grounded and answer.sources == (),
+            )
+
+
 GENERATORS: dict[str, tuple[str, Generator]] = {
     "01_dataset_report": ("Dataset report (Task 1)", dataset_report),
     "02_kb_inventory": ("Knowledge-base inventory (Task 2)", kb_inventory),
     "03_chunking_and_index": ("Chunking and Chroma index (Task 3)", chunking_and_index),
-}
+    "04_threshold_calibration": ("Similarity-threshold calibration (Task 4)",
+                                 threshold_calibration),
+    "05_grounded_generation": ("Grounded generation with fallback (Task 4)",
+                               grounded_generation),
+}  # fmt: skip
 
 
 def main(argv: Sequence[str] | None = None) -> int:

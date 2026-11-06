@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     collection_meta: str = "kb_meta"  # §ARCH says `_meta`; Chroma rejects it (D-019)
     deployed_strategy: Literal["fixed", "sentence"] | None = None  # set in Phase 4
     top_k: int = Field(default=3, ge=1, le=20)
+    retrieval_config_path: Path = Path("/app/config/retrieval.json")  # generated, Phase 3
 
     api_key: SecretStr = SecretStr("dev-api-key-not-a-secret")
     admin_api_key: SecretStr = SecretStr("dev-admin-key-not-a-secret")
