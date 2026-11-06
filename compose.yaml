@@ -1,0 +1,124 @@
+# Container topology (§ARCH 3.1) and hardening (§ARCH 3.3).
+name: credagent
+
+x-hardening: &hardening
+  read_only: true
+  tmpfs:
+    - /tmp:size=512m,mode=1777
+    - /home/app:size=64m,mode=1777
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  mem_limit: 2g
+  pids_limit: 512
+
+x-app-env: &app-env
+  env_file:
+    - path: .env
+      required: false
+
+x-runtime-build: &runtime-build
+  context: .
+  dockerfile: docker/Dockerfile
+  target: runtime
+
+services:
+  chroma:
+    image: chromadb/chroma:1.5.9@sha256:1e0b73a187a28757c572acba508c46f48c9e8b0acaf5c20e6d95cdedce1acdf6
+    environment:
+      ANONYMIZED_TELEMETRY: "False"
+    volumes:
+      - chroma-data:/data
+    networks: [backend]
+    # The image has no curl/wget/python; bash's /dev/tcp is enough for an HTTP heartbeat.
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8000 && printf 'GET /api/v2/heartbeat HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && grep -q ' 200 ' <&3"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 2g
+    pids_limit: 512
+
+  indexer:
+    <<: [*hardening, *app-env]
+    image: credagent:runtime
+    pull_policy: never  # built by `api`
+    command: ["python", "-m", "scripts.indexer"]
+    networks: [backend]
+    depends_on:
+      chroma: {condition: service_healthy}
+    healthcheck: {disable: true}
+    restart: "no"
+
+  api:
+    <<: [*hardening, *app-env]
+    image: credagent:runtime
+    build: *runtime-build
+    command: ["uvicorn", "credagent.api.app:app", "--host", "0.0.0.0", "--port", "8000",
+              "--workers", "1", "--no-access-log"]
+    volumes:
+      - logs:/data/logs
+    networks: [backend, edge]
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      indexer: {condition: service_completed_successfully}
+
+  runner:
+    <<: [*hardening, *app-env]
+    image: credagent:runtime
+    pull_policy: never
+    profiles: [tools]
+    user: "${HOST_UID:-10001}:${HOST_GID:-10001}"
+    volumes:
+      - ./transcripts:/app/transcripts
+      - ./eval/results:/app/eval/results
+      - logs:/data/logs
+    networks: [backend]
+    healthcheck: {disable: true}
+    depends_on:
+      chroma: {condition: service_healthy}
+
+  tests:
+    <<: [*hardening, *app-env]
+    image: credagent:dev
+    build:
+      <<: *runtime-build
+      target: dev
+    profiles: [test]
+    user: "10001:10001"
+    working_dir: /app
+    environment:
+      COVERAGE_FILE: /tmp/.coverage
+      RUFF_CACHE_DIR: /tmp/.ruff_cache
+      MYPY_CACHE_DIR: /tmp/.mypy_cache
+    volumes:
+      - .:/app:ro
+      - logs:/data/logs:ro
+    networks: [backend]
+    healthcheck: {disable: true}
+
+  api-offline:
+    <<: [*hardening, *app-env]
+    image: credagent:runtime
+    pull_policy: never
+    profiles: [test, offline]
+    command: ["uvicorn", "credagent.api.app:app", "--host", "0.0.0.0", "--port", "8000",
+              "--workers", "1", "--no-access-log"]
+    volumes:
+      - logs:/data/logs
+    networks: [backend]
+    depends_on:
+      indexer: {condition: service_completed_successfully}
+
+networks:
+  backend:
+    internal: true
+  edge:
+    driver: bridge
+
+volumes:
+  chroma-data:
+  logs:

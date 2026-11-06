@@ -1,0 +1,14 @@
+# Dev/test tooling, constrained to the runtime lock so shared packages never diverge.
+-c requirements.lock
+
+pytest
+pytest-cov
+pytest-socket
+pytest-timeout
+pytest-randomly
+hypothesis
+httpx
+websockets
+ruff
+mypy
+types-PyYAML

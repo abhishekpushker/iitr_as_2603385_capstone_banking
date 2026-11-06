@@ -1,0 +1,85 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "credagent"
+version = "0.0.0"
+description = "Cred (Banking & FinTech) loan-support agent — CrewAI + RAG + Autogen review, MOCK_LLM only."
+requires-python = "==3.12.*"
+# Dependencies are pinned and hash-locked in requirements.lock (installed with --no-deps).
+dependencies = []
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+py-modules = ["dataset"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# ------------------------------------------------------------------------------ ruff
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "."]
+extend-exclude = ["transcripts", "eval/results", "artifacts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "S", "PL"]
+ignore = [
+  "PLR0913", # too many arguments: constructors mirror library signatures
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+  "S101",    # assert is the test idiom
+  "S603",    # subprocess with trusted, in-repo argv
+  "PLR2004", # magic values are the expected values
+  "PLC0415", # imports inside tests (fresh-import / subprocess isolation)
+  "S108",    # /tmp paths in tests are the container paths being asserted
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["credagent", "dataset", "scripts", "tests"]
+
+# ------------------------------------------------------------------------------ mypy
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src", "dataset.py", "scripts"]
+cache_dir = "/tmp/.mypy_cache"
+plugins = ["pydantic.mypy"]
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+# Untyped or partially typed third-party packages: relaxed per module only (§ARCH 11.2).
+module = ["crewai.*", "chromadb.*", "autogen_agentchat.*", "autogen_core.*", "sentence_transformers.*"]
+ignore_missing_imports = true
+
+# ------------------------------------------------------------------------------ pytest
+[tool.pytest.ini_options]
+minversion = "9.0"
+testpaths = ["tests"]
+cache_dir = "/tmp/.pytest_cache"
+addopts = ["-ra", "--strict-markers", "--strict-config"]
+timeout = 60
+markers = [
+  "unit: pure logic, no services (sockets disabled)",
+  "contract: pins a third-party library behaviour (§ARCH 2) (sockets disabled)",
+  "integration: needs chroma (+ indexer)",
+  "e2e: HTTP/WS against api-offline",
+  "security: canary, injection corpus, auth, offline proof, hardening",
+  "golden: regenerate-and-diff of committed artifacts",
+]
+
+# ------------------------------------------------------------------------------ coverage
+[tool.coverage.run]
+branch = true
+source = ["credagent", "dataset"]
+data_file = "/tmp/.coverage"
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+skip_covered = true
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "if __name__ == .__main__.:"]

@@ -1,0 +1,19 @@
+# Runtime dependencies (§ARCH 2.1). Compile with `make lock`; the lock is the source of truth.
+--index-url https://pypi.org/simple
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+crewai==1.15.36
+chromadb==1.5.9
+autogen-agentchat==0.7.5
+autogen-core==0.7.5
+langchain-core>=1.7.6,<2.0
+sentence-transformers==6.2.0
+torch==2.15.0+cpu
+fastapi
+uvicorn[standard]
+pydantic-settings
+pyyaml
+anyio
+numpy
+# build backend for `pip install --no-build-isolation .` in the image (keeps the build hash-locked)
+setuptools
