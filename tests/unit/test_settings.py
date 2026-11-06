@@ -17,7 +17,7 @@ ENV_KEYS = [
     "CHROMA_HOST", "CHROMA_PORT", "COLLECTION_FIXED", "COLLECTION_SENTENCE", "DEPLOYED_STRATEGY",
     "TOP_K", "API_KEY", "ADMIN_API_KEY", "LOG_PATH", "MAX_MESSAGE_CHARS", "BUDGET_MAX_TOKENS",
     "BUDGET_MAX_COST_USD", "PRICE_PER_1K_TOKENS_USD", "CACHE_MAX_ENTRIES", "CACHE_TTL_SECONDS",
-    "REQUEST_TIMEOUT_S", "CREWAI_STORAGE_DIR", "WEB_CONCURRENCY",
+    "REQUEST_TIMEOUT_S", "CREWAI_STORAGE_DIR", "WEB_CONCURRENCY", "GIT_SHA", "IMAGE_ID",
 ]  # fmt: skip
 
 
@@ -58,6 +58,8 @@ DEFAULTS: dict[str, Any] = {
     "request_timeout_s": 30.0,
     "crewai_storage_dir": Path("/tmp/crewai"),
     "web_concurrency": None,
+    "git_sha": "unknown",
+    "image_id": "unknown",
 }
 
 

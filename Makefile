@@ -98,6 +98,8 @@ pii-scan: ## PII canary scan over every sink (§ARCH 11.6) — runs the whole se
 offline-proof: ## egress probe from the backend network (+ graded scripts as they appear)
 	$(RUN_TESTS) python -m scripts.offline_probe
 	$(RUN_TOOLS) python -m scripts.offline_probe
+	$(RUN_TOOLS) python -m scripts.validate_dataset
+	$(RUN_TOOLS) python -m scripts.make_transcripts --out /tmp/transcripts
 
 image-size: ## print image sizes (recorded in docs/DECISIONS.md)
 	@docker image ls --format '{{.Repository}}:{{.Tag}}  {{.Size}}' | grep -E '^credagent:'
@@ -113,7 +115,18 @@ gate-fast: ## lint + typecheck + unit + contract (+ coverage)
 gate: ## the full regression gate (§PLAN 3); log in artifacts/gate-<phase>.log
 	ci/gate.sh $(PHASE)
 
-transcripts eval calibrate eval-chunking bless demo: ## generators (land in Phases 1–11)
+# The runner executes the code baked into credagent:runtime, so rebuild first (cached).
+# Provenance for the transcript header (§ARCH 7.19) is read after the build.
+transcripts: build ## regenerate transcripts/ in the runner (backend network only)
+	$(COMPOSE) --profile tools run --rm --no-deps -T \
+	  -e GIT_SHA="$$(git rev-parse HEAD)$$(git diff --quiet HEAD -- || echo +dirty)" \
+	  -e IMAGE_ID="$$(docker image inspect --format '{{.Id}}' credagent:runtime)" \
+	  runner python -m scripts.make_transcripts
+
+bless: transcripts ## regenerate and overwrite every committed artifact (review the diff!)
+	@git status --short -- transcripts config eval/results
+
+eval calibrate eval-chunking demo: ## generators (land in Phases 2–11)
 	@echo "make $@: not implemented yet (see docs/IMPLEMENTATION_PLAN.md §4)"; exit 1
 
 clean-volumes: ## down -v (fresh chroma/log volumes), keep images — the gate's cold rerun

@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     crewai_storage_dir: Path = Path("/tmp/crewai")  # noqa: S108  (tmpfs under a read-only root)
     web_concurrency: str | None = None
 
+    # Provenance for transcript headers (§ARCH 7.19); passed in by `make transcripts`.
+    git_sha: str = "unknown"
+    image_id: str = "unknown"
+
     @model_validator(mode="after")
     def _enforce_runtime_invariants(self) -> Self:
         if not self.mock_llm:
