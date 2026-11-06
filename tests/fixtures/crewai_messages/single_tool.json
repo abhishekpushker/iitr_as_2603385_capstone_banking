@@ -1,0 +1,36 @@
+{
+  "agent": [
+    [
+      {
+        "role": "system",
+        "content": "You are Echo Specialist. A contract-test agent.\nYour personal goal is: Answer the task.\nYou ONLY have access to the following tools, and should NEVER make up tools that are not listed here:\n\nTool Name: echo_tool\nTool Arguments: {\n  \"properties\": {\n    \"query\": {\n      \"minLength\": 1,\n      \"title\": \"Query\",\n      \"type\": \"string\"\n    }\n  },\n  \"required\": [\n    \"query\"\n  ],\n  \"title\": \"EchoArgs\",\n  \"type\": \"object\",\n  \"additionalProperties\": false\n}\nTool Description: Echo the query back as JSON.\n\nIMPORTANT: Use the following format in your response:\n\n```\nThought: you should always think about what to do\nAction: the action to take, only one name of [echo_tool], just the name, exactly as it's written.\nAction Input: the input to the action, just a simple JSON object, enclosed in curly braces, using \" to wrap keys and values.\nObservation: the result of the action\n```\n\nOnce all necessary information is gathered, return the following format:\n\n```\nThought: I now know the final answer\nFinal Answer: the final answer to the original input question\n```",
+        "cache_breakpoint": true
+      },
+      {
+        "role": "user",
+        "content": "\nCurrent Task: Echo the query. <<<QUERY>>>hello<<<END_QUERY>>>\n\nThis is the expected criteria for your final answer: A JSON object.\nyou MUST return the actual complete content as the final answer, not a summary.\nFormat your final answer according to the following OpenAPI schema: {\n  \"properties\": {\n    \"answer\": {\n      \"title\": \"Answer\",\n      \"type\": \"string\"\n    },\n    \"n\": {\n      \"title\": \"N\",\n      \"type\": \"integer\"\n    }\n  },\n  \"required\": [\n    \"answer\",\n    \"n\"\n  ],\n  \"title\": \"Answer\",\n  \"type\": \"object\",\n  \"additionalProperties\": false\n}\n\nIMPORTANT: Preserve the original content exactly as-is. Do NOT rewrite, paraphrase, or modify the meaning of the content. Only structure it to match the schema format.\n\nDo not include the OpenAPI schema in the final output. Ensure the final output does not include any code block markers like ```json or ```python.\n\nBegin! This is VERY important to you, use the tools available and give your best Final Answer, your job depends on it!\n\nThought:",
+        "cache_breakpoint": true
+      }
+    ],
+    [
+      {
+        "role": "system",
+        "content": "You are Echo Specialist. A contract-test agent.\nYour personal goal is: Answer the task.\nYou ONLY have access to the following tools, and should NEVER make up tools that are not listed here:\n\nTool Name: echo_tool\nTool Arguments: {\n  \"properties\": {\n    \"query\": {\n      \"minLength\": 1,\n      \"title\": \"Query\",\n      \"type\": \"string\"\n    }\n  },\n  \"required\": [\n    \"query\"\n  ],\n  \"title\": \"EchoArgs\",\n  \"type\": \"object\",\n  \"additionalProperties\": false\n}\nTool Description: Echo the query back as JSON.\n\nIMPORTANT: Use the following format in your response:\n\n```\nThought: you should always think about what to do\nAction: the action to take, only one name of [echo_tool], just the name, exactly as it's written.\nAction Input: the input to the action, just a simple JSON object, enclosed in curly braces, using \" to wrap keys and values.\nObservation: the result of the action\n```\n\nOnce all necessary information is gathered, return the following format:\n\n```\nThought: I now know the final answer\nFinal Answer: the final answer to the original input question\n```",
+        "cache_breakpoint": true
+      },
+      {
+        "role": "user",
+        "content": "\nCurrent Task: Echo the query. <<<QUERY>>>hello<<<END_QUERY>>>\n\nThis is the expected criteria for your final answer: A JSON object.\nyou MUST return the actual complete content as the final answer, not a summary.\nFormat your final answer according to the following OpenAPI schema: {\n  \"properties\": {\n    \"answer\": {\n      \"title\": \"Answer\",\n      \"type\": \"string\"\n    },\n    \"n\": {\n      \"title\": \"N\",\n      \"type\": \"integer\"\n    }\n  },\n  \"required\": [\n    \"answer\",\n    \"n\"\n  ],\n  \"title\": \"Answer\",\n  \"type\": \"object\",\n  \"additionalProperties\": false\n}\n\nIMPORTANT: Preserve the original content exactly as-is. Do NOT rewrite, paraphrase, or modify the meaning of the content. Only structure it to match the schema format.\n\nDo not include the OpenAPI schema in the final output. Ensure the final output does not include any code block markers like ```json or ```python.\n\nBegin! This is VERY important to you, use the tools available and give your best Final Answer, your job depends on it!\n\nThought:",
+        "cache_breakpoint": true
+      },
+      {
+        "role": "assistant",
+        "content": "Thought: ⟦contract-action:1⟧ I need the tool\nAction: echo_tool\nAction Input: {\"query\": \"hello\"}\nObservation: {\"kind\": \"echo_result\", \"echo\": \"hello\"}"
+      },
+      {
+        "role": "user",
+        "content": "Analyze the tool result. If requirements are met, provide the Final Answer. Otherwise, call the next tool. Deliver only the answer without meta-commentary."
+      }
+    ]
+  ]
+}
