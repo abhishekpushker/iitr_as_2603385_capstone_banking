@@ -101,7 +101,8 @@ offline-proof: ## egress probe from the backend network (+ graded scripts as the
 	$(RUN_TOOLS) python -m scripts.offline_probe
 	$(COMPOSE) run --rm -T indexer
 	$(RUN_TOOLS) python -m scripts.validate_dataset
-	$(RUN_TOOLS) python -m scripts.calibrate_threshold --out /tmp/retrieval.json
+	$(RUN_TOOLS) sh -c 'python -m scripts.calibrate_threshold --out /tmp/retrieval.json \
+	  && python -m scripts.eval_chunking --config /tmp/retrieval.json --report /tmp/chunking_pr.md'
 	$(RUN_TOOLS) python -m scripts.make_transcripts --out /tmp/transcripts
 
 image-size: ## print image sizes (recorded in docs/DECISIONS.md)
@@ -130,10 +131,18 @@ transcripts: index ## regenerate transcripts/ in the runner (backend network onl
 calibrate: index ## measure calibration similarities on both collections → config/retrieval.json
 	$(RUN_TOOLS) python -m scripts.calibrate_threshold
 
-bless: calibrate transcripts ## regenerate and overwrite every committed artifact (review the diff!)
+# `calibrate` rewrites config/retrieval.json with deployed_strategy = null; `eval-chunking` then
+# sets it from the P/R results (D-027), so bless runs them in this order, before the transcripts.
+eval-chunking: index ## P/R of both chunking strategies → eval/results/chunking_pr.md + deployed_strategy
+	$(RUN_TOOLS) python -m scripts.eval_chunking
+
+bless: ## regenerate and overwrite every committed artifact (review the diff!)
+	$(MAKE) --no-print-directory calibrate
+	$(MAKE) --no-print-directory eval-chunking
+	$(MAKE) --no-print-directory transcripts
 	@git status --short -- transcripts config eval/results
 
-eval eval-chunking demo: ## generators (land in Phases 4–11)
+eval demo: ## generators (land in Phases 10–11)
 	@echo "make $@: not implemented yet (see docs/IMPLEMENTATION_PLAN.md §4)"; exit 1
 
 clean-volumes: ## down -v (fresh chroma/log volumes), keep images — the gate's cold rerun

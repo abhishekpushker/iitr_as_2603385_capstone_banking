@@ -7,10 +7,12 @@ Every transcript is written even when a check fails; the exit code is then 1.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from collections import Counter
 from collections.abc import Callable, Sequence
+from fractions import Fraction
 from pathlib import Path
 from typing import get_args
 
@@ -23,6 +25,7 @@ from credagent.kb.version import kb_version
 from credagent.llm.engine import MockEngine
 from credagent.observability.metrics import Metrics
 from credagent.rag import calibration as cal
+from credagent.rag import evaluation as ev
 from credagent.rag.embedder import get_embedder
 from credagent.rag.generator import GroundedGenerator
 from credagent.rag.retriever import Retriever, collections_from_settings
@@ -483,8 +486,12 @@ def threshold_calibration(t: Transcript) -> None:
     t.check(
         "calibration queries are disjoint from the demo and sample queries", calib.isdisjoint(demo)
     )
+    # `deployed_strategy` is owned by scripts/eval_chunking.py (transcript 06, D-027).
+    deployed = json.loads(committed).get("deployed_strategy")
     t.check(
-        "`config/retrieval.json` equals a fresh calibration byte for byte", committed == rendered
+        "`config/retrieval.json` equals a fresh calibration byte for byte, apart from "
+        f"`deployed_strategy` (`{deployed}`, set by `eval_chunking`, transcript 06)",
+        committed == cal.dumps_config({**json.loads(rendered), "deployed_strategy": deployed}),
     )
     t.check(
         f"groundedness demo query is below the threshold ({probe.top1_similarity:.3f} < "
@@ -599,6 +606,140 @@ def grounded_generation(t: Transcript) -> None:
             )
 
 
+_DECIMAL = re.compile(r"\d+\.\d+")
+
+
+def chunking_precision_recall(t: Transcript) -> None:
+    s = t.settings
+    committed = s.retrieval_config_path.read_text(encoding="utf-8")
+    config = json.loads(committed)
+    top_k = int(config["top_k"])
+    results = ev.evaluate(_retriever(s), top_k=top_k)
+    choice = ev.choose(results, gated=config["gated_strategy"])
+    calib = ev.calibration_of(config, choice.winner)
+    min_gap = float(config["min_gap"])
+    rec = ev.recommendation(results, choice, calib, min_gap=min_gap, top_k=top_k)
+    report = ev.render_report(results, choice, rec, top_k=top_k)
+
+    t.section("Inputs")
+    t.para(
+        f"{len(ev.PR_QUERIES)} in-scope queries with gold `relevant_doc_ids` "
+        "(`credagent.rag.evaluation.PR_QUERIES`, disjoint from the calibration set), run through "
+        f"the production `Retriever` (top-{top_k}, cosine) on **both** collections. Per query: "
+        "top-k chunks → `doc_id` → deduplicated in rank order → `P = |rel ∩ ret| / |ret|`, "
+        "`R = |rel ∩ ret| / |rel|` (`P := 0` and a warning when nothing is retrieved). Macro "
+        "averages per collection. Choice: higher macro F1, then higher mean top-1 similarity, "
+        "then fewer documents retrieved per query, then the gated strategy (D-027)."
+    )
+    t.table(
+        ["#", "query", "relevant_doc_ids"],
+        [[i, q.query, ", ".join(f"`{d}`" for d in q.relevant_doc_ids)]
+         for i, q in enumerate(ev.PR_QUERIES, start=1)],
+    )  # fmt: skip
+
+    for st in sorted(results):
+        c = results[st]
+        t.section(f"Per-query retrieval — `{c.collection}` ({st})")
+        for i, qe in enumerate(c.queries, start=1):
+            t.para(f"**Q{i}: {qe.query.query}**")
+            t.table(
+                ["rank", "similarity", "doc_id", "chunk_id", "relevant"],
+                [[ch.rank, f"{ch.similarity:.3f}", f"`{ch.doc_id}`", f"`{ch.chunk_id}`",
+                  "✔" if ch.doc_id in qe.query.relevant_doc_ids else "—"]
+                 for ch in qe.chunks],
+            )  # fmt: skip
+            t.para(
+                f"retrieved docs (dedup): {', '.join(qe.score.retrieved) or '—'} → "
+                f"`{qe.score.precision_arithmetic}`, `{qe.score.recall_arithmetic}`"
+            )
+        t.section(f"P/R table — `{c.collection}` ({st})")
+        t.table(ev.PR_HEADERS, ev.pr_rows(c))
+        t.para(f"`{c.macro_precision_arithmetic}`  \n`{c.macro_recall_arithmetic}`")
+
+    t.section("Macro averages")
+    t.table(ev.AVERAGE_HEADERS, ev.average_rows(results))
+    t.para(
+        f"Winner: **`{choice.winner}`** (decided by `{choice.decided_by}`); runner-up "
+        f"`{choice.runner_up}`."
+    )
+
+    t.section("Recommendation")
+    t.para(rec)
+
+    t.section("Deployment")
+    threshold = config["collections"][choice.winner]["threshold"]
+    t.para(
+        f"`config/retrieval.json`: `deployed_strategy = {json.dumps(config['deployed_strategy'])}`"
+        f" → collection `{results[choice.winner].collection}`, threshold `{threshold}` "
+        f"(calibration gap {calib.gap:.3f}, `meets_min_gap = {str(calib.meets_min_gap).lower()}`)."
+    )
+
+    calib_queries = {normalize_query(q.query) for q in cal.IN_SCOPE_QUERIES} | {
+        normalize_query(q) for q in cal.OUT_OF_SCOPE_QUERIES
+    }
+    pr_queries = {normalize_query(q.query) for q in ev.PR_QUERIES}
+    t.check(f"exactly 5 P/R queries ({len(ev.PR_QUERIES)})", len(pr_queries) == 5)
+    two = sum(len(q.relevant_doc_ids) == 2 for q in ev.PR_QUERIES)
+    t.check(f"≥ 2 queries have two relevant documents ({two})", two >= 2)
+    t.check("P/R queries are disjoint from the calibration queries",
+            pr_queries.isdisjoint(calib_queries))  # fmt: skip
+    for st, c in sorted(results.items()):
+        t.check(
+            f"`{c.collection}`: every in-scope query retrieves ≥ 1 document (no P := 0 case)",
+            all(qe.score.retrieved for qe in c.queries),
+        )
+        t.check(
+            f"`{c.collection}`: every P and R recomputed from the chunk table matches",
+            all(
+                qe.score.retrieved == tuple(dict.fromkeys(ch.doc_id for ch in qe.chunks))
+                and qe.score.precision
+                == Fraction(
+                    len(set(qe.score.retrieved) & set(qe.query.relevant_doc_ids)),
+                    len(qe.score.retrieved),
+                )
+                and qe.score.recall
+                == Fraction(
+                    len(set(qe.score.retrieved) & set(qe.query.relevant_doc_ids)),
+                    len(qe.query.relevant_doc_ids),
+                )
+                for qe in c.queries
+            ),
+        )
+        t.check(
+            f"`{c.collection}` ({st}): macro P {float(c.macro_precision):.3f} and macro R "
+            f"{float(c.macro_recall):.3f} are the means of the per-query values",
+            c.macro_precision == sum(q.score.precision for q in c.queries) / len(c.queries)
+            and c.macro_recall == sum(q.score.recall for q in c.queries) / len(c.queries),
+        )
+    w, lo = results[choice.winner], results[choice.runner_up]
+    numbers = _DECIMAL.findall(rec)
+    t.check(
+        f"recommendation has 2–3 sentences ({len(text.split_sentences(rec))})",
+        2 <= len(text.split_sentences(rec)) <= 3,
+    )
+    t.check(
+        "numbers parsed back from the recommendation equal the measured macro P/R and gap",
+        numbers[:4]
+        == [f"{float(x):.3f}" for x in
+            (w.macro_precision, w.macro_recall, lo.macro_precision, lo.macro_recall)]
+        and f"{calib.gap:.3f}" in numbers,
+    )  # fmt: skip
+    t.check(
+        f"winner `{choice.winner}` meets the calibration gap ({calib.gap:.3f} ≥ {min_gap})",
+        calib.meets_min_gap and calib.gap >= min_gap,
+    )
+    t.check(
+        f"`config/retrieval.json` deploys the winner (`deployed_strategy = "
+        f"{json.dumps(config['deployed_strategy'])}`)",
+        config["deployed_strategy"] == choice.winner,
+    )
+    t.check(
+        "`eval/results/chunking_pr.md` equals the freshly rendered report byte for byte",
+        s.chunking_report_path.is_file()
+        and s.chunking_report_path.read_text(encoding="utf-8") == report,
+    )
+
+
 GENERATORS: dict[str, tuple[str, Generator]] = {
     "01_dataset_report": ("Dataset report (Task 1)", dataset_report),
     "02_kb_inventory": ("Knowledge-base inventory (Task 2)", kb_inventory),
@@ -607,6 +748,8 @@ GENERATORS: dict[str, tuple[str, Generator]] = {
                                  threshold_calibration),
     "05_grounded_generation": ("Grounded generation with fallback (Task 4)",
                                grounded_generation),
+    "06_chunking_precision_recall": ("Chunking evaluation: precision / recall (Task 5)",
+                                     chunking_precision_recall),
 }  # fmt: skip
 
 
