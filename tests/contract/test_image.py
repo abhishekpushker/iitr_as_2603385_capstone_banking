@@ -40,6 +40,18 @@ def test_embedding_model_is_baked_in_at_the_pinned_revision() -> None:
     assert revision == os.environ["EMBED_MODEL_REVISION"]
 
 
+def test_every_model_file_is_readable_by_the_runtime_user() -> None:
+    """BUG-001: `SentenceTransformer.save()` (run as root in the `model` stage) wrote
+    `model.safetensors` with mode 0600, so uid 10001 could not read the weights. transformers
+    reported that as a misleading "FileNotFoundError: No such file or directory"."""
+    files = [p for p in MODEL_DIR.rglob("*") if p.is_file()]
+    assert files
+    unreadable = [str(p.relative_to(MODEL_DIR)) for p in files if not os.access(p, os.R_OK)]
+    assert unreadable == []
+    with (MODEL_DIR / "model.safetensors").open("rb") as fh:
+        assert fh.read(8)
+
+
 @pytest.mark.parametrize(
     ("key", "value"),
     [

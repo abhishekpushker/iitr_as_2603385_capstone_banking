@@ -37,7 +37,8 @@ model.save("/models/all-MiniLM-L6-v2")
 with open("/models/all-MiniLM-L6-v2/REVISION", "w", encoding="utf-8") as fh:
     fh.write("${MODEL_REVISION}\n")
 EOF
-RUN rm -rf /tmp/hf
+# BUG-001: save() writes model.safetensors as 0600 root; the runtime user (10001) must read it.
+RUN rm -rf /tmp/hf && chmod -R a+rX,go-w /models
 
 # ---------------------------------------------------------------------------- runtime
 FROM deps AS runtime
