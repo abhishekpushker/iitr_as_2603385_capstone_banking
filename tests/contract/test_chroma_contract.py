@@ -117,3 +117,18 @@ def test_client_and_server_interoperate_over_http() -> None:
     finally:
         http.delete_collection(name)
     assert name not in {c.name for c in http.list_collections()}
+
+
+@pytest.mark.parametrize("name", ["_meta", "meta_", "ab"])
+def test_collection_names_must_start_and_end_alphanumeric(client: Any, name: str) -> None:
+    """§ARCH 3.5/7.4 name the metadata collection `_meta`, which chromadb 1.5.9 rejects:
+    names are 3–512 chars of [a-zA-Z0-9._-] and must start and end with [a-zA-Z0-9]."""
+    with pytest.raises(chromadb.errors.InvalidArgumentError, match="starting and ending"):
+        client.get_or_create_collection(name, embedding_function=None)
+
+
+def test_records_need_a_document_and_an_embedding(client: Any) -> None:
+    """A metadata-only record is rejected, so `_meta` rows carry a document + an embedding."""
+    col = client.get_or_create_collection("contract_meta", embedding_function=None)
+    with pytest.raises(ValueError, match=r"Exactly one of (documents, images|images, documents)"):
+        col.upsert(ids=["kb_version"], metadatas=[{"kb_version": "x"}])
