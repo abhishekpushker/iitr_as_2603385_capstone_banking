@@ -13,16 +13,16 @@ import pytest
 
 from credagent.cache.response_cache import normalize_query
 from credagent.rag import calibration as cal
+from credagent.rag import evaluation
 from scripts import make_transcripts
 
 REPO = Path(__file__).resolve().parents[2]
 LLM_DIR = REPO / "src" / "credagent" / "llm"
 
-# Queries the architecture already fixes for later phases (§ARCH 7.6, 7.10, 7.12). Later phases
-# register their real sets (P/R in Phase 4, eval/testset.yaml in Phase 11) here.
+# Queries the architecture already fixes for later phases (§ARCH 7.10, 7.12). Later phases
+# register their real sets (eval/testset.yaml in Phase 11) here; the §ARCH 7.6 P/R examples now
+# live in `evaluation.PR_QUERIES`.
 RESERVED = (
-    "Can an NRI be a joint account holder?",
-    "What prepayment penalty applies and what rate slab applies to a personal loan?",
     "What is the status of application LA-0007?",
     "What are the eligibility criteria for it?",
     "And does it carry a prepayment penalty?",
@@ -41,7 +41,8 @@ def other_query_sets(*, include_held_out: bool = True) -> dict[str, set[str]]:
         "demo (transcript 05)": {q for q, _ in make_transcripts.DEMO_IN_SCOPE}
         | {make_transcripts.DEMO_OUT_OF_SCOPE},
         "transcript 03 sample": {make_transcripts.SAMPLE_QUERY},
-        "reserved (§ARCH 7.6/7.10/7.12)": set(RESERVED),
+        "reserved (§ARCH 7.10/7.12)": set(RESERVED),
+        "P/R (§ARCH 7.6)": {q.query for q in evaluation.PR_QUERIES},
         "calibration": calibration_queries(),
     }
     if include_held_out:
