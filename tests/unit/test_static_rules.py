@@ -13,8 +13,9 @@ SRC = REPO / "src" / "credagent"
 
 # §ARCH 4: api → pipeline → {crew, review, guardrails, memory, cache, governance}
 #          → {tools, rag, llm} → {kb, text, schemas, settings}. Same rank may import each other.
+# `observability` (counters, later the JSON log formatter) is a leaf every layer may use (D-024).
 LAYER_RANK: dict[str, int] = {
-    "settings": 0, "schemas": 0, "text": 0, "kb": 0,
+    "settings": 0, "schemas": 0, "text": 0, "kb": 0, "observability": 0,
     "tools": 1, "rag": 1, "llm": 1,
     "crew": 2, "review": 2, "guardrails": 2, "memory": 2, "cache": 2, "governance": 2,
     "pipeline": 3,

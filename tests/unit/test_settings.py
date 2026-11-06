@@ -55,6 +55,7 @@ DEFAULTS: dict[str, Any] = {
     "collection_meta": "kb_meta",
     "deployed_strategy": None,
     "top_k": 3,
+    "retrieval_config_path": Path("/app/config/retrieval.json"),
     "log_path": Path("/data/logs/requests.jsonl"),
     "max_message_chars": 20000,
     "budget_max_tokens": 8000,

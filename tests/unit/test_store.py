@@ -48,7 +48,10 @@ def _fill(vs: VectorStore, name: str) -> None:
         ids=list(ROWS),
         embeddings=[_unit(v) for _, v in ROWS.values()],
         documents=[f"text of {i}" for i in ROWS],
-        metadatas=[{"doc_id": d, "index": n} for n, (d, _) in enumerate(ROWS.values())],
+        metadatas=[
+            {"doc_id": d, "index": n, "char_start": 10 * n}
+            for n, (d, _) in enumerate(ROWS.values())
+        ],
     )
 
 
@@ -72,6 +75,7 @@ def test_query_returns_similarity_sorted_desc(store: VectorStore) -> None:
         assert c.similarity == pytest.approx(expected, abs=1e-6)  # P7: 1 − cosine distance
         assert c.doc_id == ROWS[c.chunk_id][0]
         assert c.text == f"text of {c.chunk_id}"
+        assert c.char_start == 10 * list(ROWS).index(c.chunk_id)
 
 
 def test_ties_are_broken_by_chunk_id(store: VectorStore) -> None:
@@ -80,7 +84,7 @@ def test_ties_are_broken_by_chunk_id(store: VectorStore) -> None:
     ids = ["b::s::000", "a::s::000", "c::s::000"]
     store.upsert(
         name, ids=ids, embeddings=[v] * 3, documents=ids,
-        metadatas=[{"doc_id": i.split("::")[0]} for i in ids],
+        metadatas=[{"doc_id": i.split("::")[0], "char_start": 0} for i in ids],
     )  # fmt: skip
     assert [c.chunk_id for c in store.query(name, v, k=3)] == sorted(ids)
 
