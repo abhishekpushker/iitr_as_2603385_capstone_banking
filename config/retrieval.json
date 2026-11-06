@@ -263,7 +263,7 @@
       "threshold": 0.567
     }
   },
-  "deployed_strategy": null,
+  "deployed_strategy": "sentence",
   "embed_model": "all-MiniLM-L6-v2",
   "gated_strategy": "sentence",
   "kb_version": "1981d4b5747c6aaa3f70dbd0df0bacf61f88b8b8b90ce6e972b601e843cd88ce",
