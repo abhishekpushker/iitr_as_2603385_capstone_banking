@@ -104,3 +104,34 @@ def test_environment_is_read_only_through_settings(path: Path) -> None:
         return
     lines = list(_env_accesses(ast.parse(path.read_text(encoding="utf-8"))))
     assert lines == [], f"{path} reads the environment directly at lines {lines}"
+
+
+# Stricter than rank order: rag shares a rank with llm, yet retrieval must never reach the LLM.
+FORBIDDEN_IMPORTS: dict[str, set[str]] = {
+    "kb": {"crew", "api", "pipeline", "llm", "rag"},
+    "rag": {"crew", "api", "pipeline", "llm"},
+}
+_GUARDED = [p for p in _modules() if _component(p) in FORBIDDEN_IMPORTS]
+
+
+def test_kb_and_rag_modules_exist() -> None:
+    assert {_component(p) for p in _GUARDED} == set(FORBIDDEN_IMPORTS)
+
+
+@pytest.mark.parametrize("path", _GUARDED, ids=lambda p: str(p.relative_to(SRC)))
+def test_kb_and_rag_do_not_import_agent_layers(path: Path) -> None:
+    forbidden = FORBIDDEN_IMPORTS[_component(path) or ""]
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    hits = [
+        t for t in _credagent_imports(tree) if t.split(".")[1:2] and t.split(".")[1] in forbidden
+    ]
+    assert hits == [], f"{path} imports {hits}"
+
+
+SCRIPT_DIR = REPO / "scripts"
+
+
+@pytest.mark.parametrize("path", sorted(SCRIPT_DIR.glob("*.py")), ids=lambda p: p.name)
+def test_scripts_read_the_environment_only_through_settings(path: Path) -> None:
+    lines = list(_env_accesses(ast.parse(path.read_text(encoding="utf-8"))))
+    assert lines == [], f"{path} reads the environment directly at lines {lines}"

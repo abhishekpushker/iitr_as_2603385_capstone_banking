@@ -38,10 +38,15 @@ class Settings(BaseSettings):
     omp_num_threads: int = Field(default=1, ge=1)
 
     embed_model_path: Path = Path("/models/all-MiniLM-L6-v2")
+    embed_batch_size: int = Field(default=32, ge=1)
+    kb_dir: Path = Path("/app/kb")
     chroma_host: str = "chroma"
     chroma_port: int = Field(default=8000, ge=1, le=65535)
+    chroma_connect_attempts: int = Field(default=10, ge=1)  # §ARCH 3.5 bounded retry
+    chroma_backoff_cap_s: float = Field(default=5.0, gt=0)
     collection_fixed: str = "kb_fixed_v1"
     collection_sentence: str = "kb_sentence_v1"
+    collection_meta: str = "kb_meta"  # §ARCH says `_meta`; Chroma rejects it (D-019)
     deployed_strategy: Literal["fixed", "sentence"] | None = None  # set in Phase 4
     top_k: int = Field(default=3, ge=1, le=20)
 

@@ -18,6 +18,8 @@ ENV_KEYS = [
     "TOP_K", "API_KEY", "ADMIN_API_KEY", "LOG_PATH", "MAX_MESSAGE_CHARS", "BUDGET_MAX_TOKENS",
     "BUDGET_MAX_COST_USD", "PRICE_PER_1K_TOKENS_USD", "CACHE_MAX_ENTRIES", "CACHE_TTL_SECONDS",
     "REQUEST_TIMEOUT_S", "CREWAI_STORAGE_DIR", "WEB_CONCURRENCY", "GIT_SHA", "IMAGE_ID",
+    "EMBED_BATCH_SIZE", "KB_DIR", "CHROMA_CONNECT_ATTEMPTS", "CHROMA_BACKOFF_CAP_S",
+    "COLLECTION_META",
 ]  # fmt: skip
 
 
@@ -42,10 +44,15 @@ DEFAULTS: dict[str, Any] = {
     "tokenizers_parallelism": False,
     "omp_num_threads": 1,
     "embed_model_path": Path("/models/all-MiniLM-L6-v2"),
+    "embed_batch_size": 32,
+    "kb_dir": Path("/app/kb"),
     "chroma_host": "chroma",
     "chroma_port": 8000,
+    "chroma_connect_attempts": 10,
+    "chroma_backoff_cap_s": 5.0,
     "collection_fixed": "kb_fixed_v1",
     "collection_sentence": "kb_sentence_v1",
+    "collection_meta": "kb_meta",
     "deployed_strategy": None,
     "top_k": 3,
     "log_path": Path("/data/logs/requests.jsonl"),
