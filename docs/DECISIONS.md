@@ -149,5 +149,56 @@ configuration read-back, idempotent upsert, query distances vs numpy, metadata, 
 No version strings are compared. The client stays pinned at 1.5.9 (`test_client_version_is_pinned`)
 and the server image by digest (D-004). §ARCH 2.1 and P8 are amended accordingly.
 
+## Phase 1 — dataset (2026-11-07)
+
+### D-016 Generator details within §ARCH 7.1
+* Per record, a local `random.Random(seed)` draws in this fixed order: category
+  (`rng.choices` with `CATEGORY_WEIGHTS`), status (`STATUS_WEIGHTS`), amount
+  (`exp(uniform(ln lo, ln hi))` rounded to the nearest ₹5,000, then clamped to `[lo, hi]`; the
+  clamp never changes a value because both bounds are multiples of 5,000), `randint(0, 30)` days,
+  then the fraud flag (`rng.random() < 0.18`). Changing this order changes the dataset and its
+  golden hash.
+* Stdlib only, as §7.1 says. Besides the modules listed there, `math` (log-uniform), `re` (id
+  pattern), `sys` (exit code) and `typing` are used. A unit test asserts every import is in
+  `sys.stdlib_module_names`.
+* `validate` checks more than the §7.1 minimum because the same rules guard Phase 5's lookup
+  tool: exact field order (`dataset.FIELDS`), exact types (`bool` is not accepted as `int`),
+  known vocabularies, days in [0, 30], and an id pattern of `^LA-\d{4}$`.
+* `report` adds the sha256 fingerprint, per-category min/median/max amounts and a
+  category × status table. `python -m dataset` prints it as JSON. `python -m
+  scripts.validate_dataset` prints it as Markdown. Both exit 1 if the dataset is invalid.
+* The seed procedure is code (`scripts/validate_dataset.py::seed_history`). Transcript 01
+  recomputes it, and a unit test asserts that `SEED` is the first valid seed from 2026.
+
+### D-017 `LoanCategory` / `LoanStatus` land in Phase 1
+§PLAN Phase 1 tests that the schema literals equal the dataset vocabularies, so
+`credagent/schemas.py` is created now with just those two `Literal`s. The models in §7.11 come
+in Phase 6.
+
+### D-018 Transcript framework
+`scripts/transcript_kit.py` (`Transcript`: header block, Markdown helpers, ✔/✘ checks,
+`normalise`) and `scripts/make_transcripts.py` (generator registry and CLI; exit 1 on any ✘
+or on a transcript with no checks). The header provenance, `GIT_SHA` and `IMAGE_ID`, is two new
+`Settings` fields (default `unknown`) that `make transcripts` passes in. The image cannot see
+`.git`, and only settings may read the environment. `make transcripts` depends on `make build`
+because the `runner` runs the code baked into `credagent:runtime`. `make bless` is
+`transcripts` for now, plus a `git status` of the artifact directories. The golden layer
+(`tests/golden/test_transcripts.py`) regenerates into a tmp dir in the `tests` container and
+diffs after normalisation. It also checks that committed transcripts and registered generators
+are the same set. `make offline-proof` now also runs `scripts.validate_dataset` and
+`scripts.make_transcripts --out /tmp/transcripts` in the runner on the backend network.
+
 ## Seed history (Phase 1)
-_To be filled in Phase 1 (§ARCH 7.1)._
+Procedure (§ARCH 7.1): start at `SEED = 2026` and increment until `validate` returns no
+problems. Records are never edited. Every attempt:
+
+| Attempt | Seed | `validate` result |
+|---|---|---|
+| 1 | 2026 | valid: no problems |
+
+**Chosen seed: 2026**, the first attempt. Resulting dataset: 60 records. Categories: Personal
+12, Home 14, Auto 19, Education 6, Business 9. Statuses: Submitted 13, Under Review 15,
+Approved 10, Rejected 13, Disbursed 9. Fraud-flagged 10/60 = 16.67%. sha256
+`92fd6e6696e4437ed8fefe7b2333a9700dfd46ddfcf411f1744231724d39946e`, pinned in
+`tests/unit/test_dataset.py::GOLDEN_SHA256`. Transcript 01 recomputes this table on every run,
+and `test_seed_is_the_first_valid_seed_from_the_start` enforces it.
