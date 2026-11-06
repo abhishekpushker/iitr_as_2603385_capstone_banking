@@ -15,9 +15,16 @@ from pathlib import Path
 from typing import get_args
 
 import dataset
+from credagent import text
+from credagent.kb.chunking import FIXED_PARAMS, STRATEGIES, Chunk, chunk_document, chunk_params
+from credagent.kb.loader import DISCLAIMER, KbDocument, load_kb
+from credagent.kb.version import kb_version
+from credagent.rag.embedder import get_embedder
+from credagent.rag.store import VectorStore, connect_http
 from credagent.schemas import LoanCategory, LoanStatus
 from credagent.settings import get_settings
 from scripts import validate_dataset
+from scripts.indexer import CollectionNames
 from scripts.transcript_kit import Transcript
 
 COMMAND = "make transcripts  (python -m scripts.make_transcripts)"
@@ -129,8 +136,217 @@ def dataset_report(t: Transcript) -> None:
     )
 
 
+# The brief's 12 required KB topics (Task 2), restated independently of the tests.
+REQUIRED_TOPICS = (
+    "Loan eligibility by type", "EMI rules", "Credit-card fee structure", "KYC requirements",
+    "Fraud-dispute resolution", "Account closure", "Interest-rate slabs", "Prepayment penalties",
+    "Minimum balance", "Credit-score impact", "Joint-account rules", "NRI eligibility",
+)  # fmt: skip
+SAMPLE_QUERY = "Is there a penalty for prepaying a personal loan?"
+SAMPLE_EXPECTED_DOC = "kb-08-prepayment-penalty"
+
+
+def kb_inventory(t: Transcript) -> None:
+    s = t.settings
+    docs = load_kb(s.kb_dir)
+    sentences = {d.doc_id: text.split_sentences(d.body) for d in docs}
+
+    t.section("Inputs")
+    t.para(
+        f"`{len(docs)}` Markdown files in `kb/`, loaded by `credagent.kb.loader.load_kb` "
+        "(YAML `safe_load` front matter → frozen `KbDocument`, NFKC-normalised). Sentences are "
+        "counted with the project splitter `credagent.text.split_sentences`. "
+        f"`kb_version = {kb_version(s.kb_dir)}`."
+    )
+
+    t.section("Inventory")
+    t.table(
+        ["doc_id", "title", "topic", "sentences", "chars"],
+        [[f"`{d.doc_id}`", d.title, d.topic, len(sentences[d.doc_id]), len(d.body)] for d in docs],
+    )
+
+    t.section("Required topic → document coverage")
+    by_topic = {d.topic: d.doc_id for d in docs}
+    t.table(
+        ["#", "Required topic", "doc_id", "Covered"],
+        [
+            [i, topic, f"`{by_topic[topic]}`" if topic in by_topic else "—",
+             "✔" if topic in by_topic else "✘"]
+            for i, topic in enumerate(REQUIRED_TOPICS, start=1)
+        ],
+    )  # fmt: skip
+    extra = [d for d in docs if d.topic not in REQUIRED_TOPICS]
+    t.para("Additional document: " + ", ".join(f"`{d.doc_id}` ({d.topic})" for d in extra) + ".")
+
+    t.section("Sentence split of each document")
+    for d in docs:
+        t.para(f"**`{d.doc_id}`**")
+        t.raw("\n".join(f"{i}. {sent}" for i, sent in enumerate(sentences[d.doc_id], start=1)))
+
+    counts = [len(v) for v in sentences.values()]
+    ids = [d.doc_id for d in docs]
+    t.check(f"exactly 13 documents ({len(docs)})", len(docs) == 13)
+    t.check(
+        f"all 12 required topics covered ({sum(x in by_topic for x in REQUIRED_TOPICS)}/12)",
+        all(x in by_topic for x in REQUIRED_TOPICS),
+    )
+    t.check("each topic maps to exactly one document", len(by_topic) == len(docs))
+    t.check(
+        f"every body has 2–5 sentences (min {min(counts)}, max {max(counts)})",
+        all(2 <= c <= 5 for c in counts),
+    )
+    t.check("doc_ids unique and sorted", ids == sorted(set(ids)))
+    t.check("every document carries the disclaimer", all(d.disclaimer == DISCLAIMER for d in docs))
+    t.check("every document is version 1", all(d.version == 1 for d in docs))
+
+
+def _chunk_rows(chunks: Sequence[Chunk]) -> list[list[object]]:
+    return [
+        [f"`{c.chunk_id}`", f"{c.char_start}–{c.char_end}", len(c.text), c.text] for c in chunks
+    ]
+
+
+def _fixed_invariants_hold(doc: KbDocument, chunks: Sequence[Chunk]) -> bool:
+    body = doc.body
+    covered = {i for c in chunks for i in range(c.char_start, c.char_end)}
+    return (
+        all(body[c.char_start : c.char_end] == c.text and c.text.strip() == c.text for c in chunks)
+        and all(i in covered or body[i].isspace() for i in range(len(body)))
+        and all(b.char_start < a.char_end for a, b in zip(chunks, chunks[1:], strict=False))
+        and all(
+            (c.char_start == 0 or body[c.char_start - 1].isspace())
+            and (c.char_end == len(body) or body[c.char_end].isspace())
+            for c in chunks
+        )
+    )
+
+
+def chunking_and_index(t: Transcript) -> None:
+    s = t.settings
+    docs = load_kb(s.kb_dir)
+    version = kb_version(s.kb_dir)
+    names = CollectionNames.from_settings(s)
+    chunks = {st: [c for d in docs for c in chunk_document(d, st)] for st in STRATEGIES}
+
+    t.section("Inputs")
+    t.para(
+        f"Fixed-size: `size={FIXED_PARAMS.size}`, `overlap={FIXED_PARAMS.overlap}`, word-boundary "
+        f"snapping capped at `size+{FIXED_PARAMS.max_extend}`. Sentence-based: one chunk per "
+        "sentence of `credagent.text.split_sentences` (abbreviations: "
+        + ", ".join(f"`{a}.`" for a in chunk_params()["sentence"]["abbreviations"])
+        + f"). Chunk ids `{{doc_id}}::{{strategy}}::{{index:03d}}`. `kb_version = {version}`."
+    )
+
+    t.section("Chunk counts")
+    per_doc = {st: {d.doc_id: 0 for d in docs} for st in STRATEGIES}
+    for st in STRATEGIES:
+        for c in chunks[st]:
+            per_doc[st][c.doc_id] += 1
+    t.table(
+        ["doc_id", "fixed", "sentence"],
+        [[f"`{d.doc_id}`", per_doc["fixed"][d.doc_id], per_doc["sentence"][d.doc_id]] for d in docs]
+        + [["**total**", f"**{len(chunks['fixed'])}**", f"**{len(chunks['sentence'])}**"]],
+    )
+
+    for st in STRATEGIES:
+        t.section(f"Example chunks — {st}")
+        t.table(["chunk_id", "span", "chars", "text"], _chunk_rows(chunks[st][:3]))
+
+    client = connect_http(
+        s.chroma_host, s.chroma_port, attempts=s.chroma_connect_attempts,
+        backoff_cap_s=s.chroma_backoff_cap_s,
+    )  # fmt: skip
+    store = VectorStore(client)
+    present = set(store.list_collections())
+    stored = {st: store.ids(names.for_strategy(st)) for st in STRATEGIES}
+    meta = store.read_meta(names.meta) or {}
+
+    t.section("Collections read back from Chroma")
+    t.table(
+        ["collection", "strategy", "count"],
+        [
+            [f"`{names.for_strategy(st)}`", st, store.count(names.for_strategy(st))]
+            for st in STRATEGIES
+        ],
+    )
+    t.table(
+        ["`" + names.meta + "` field", "value"], [[k, f"`{v}`"] for k, v in sorted(meta.items())]
+    )
+
+    t.section("Sample query")
+    t.para(f"Query: **{SAMPLE_QUERY}** (embedded with `all-MiniLM-L6-v2`, top-3, cosine).")
+    (vector,) = get_embedder().encode([SAMPLE_QUERY])
+    results = {st: store.query(names.for_strategy(st), vector, k=3) for st in STRATEGIES}
+    for st in STRATEGIES:
+        t.para(f"**`{names.for_strategy(st)}`**")
+        t.table(
+            ["rank", "similarity", "doc_id", "chunk_id", "text"],
+            [[r.rank, f"{r.similarity:.3f}", f"`{r.doc_id}`", f"`{r.chunk_id}`", r.text]
+             for r in results[st]],
+        )  # fmt: skip
+
+    by_id = {d.doc_id: d for d in docs}
+    fixed_by_doc = {d.doc_id: [c for c in chunks["fixed"] if c.doc_id == d.doc_id] for d in docs}
+    for st in STRATEGIES:
+        name = names.for_strategy(st)
+        t.check(f"collection `{name}` exists", name in present)
+        t.check(
+            f"`{name}` holds exactly the {len(chunks[st])} chunk ids the chunker produces",
+            stored[st] == {c.chunk_id for c in chunks[st]},
+        )
+    t.check(f"collection `{names.meta}` exists", names.meta in present)
+    t.check(
+        "`kb_meta.kb_version` equals the version computed from `kb/`",
+        meta.get("kb_version") == version,
+    )
+    t.check(
+        "`kb_meta` counts equal the collection counts",
+        meta.get("count_fixed") == len(chunks["fixed"])
+        and meta.get("count_sentence") == len(chunks["sentence"]),
+    )
+    t.check(
+        "chunk ids unique per strategy",
+        all(len({c.chunk_id for c in chunks[st]}) == len(chunks[st]) for st in STRATEGIES),
+    )
+    t.check(
+        "fixed chunks: full coverage, consecutive overlap, no split words, exact spans",
+        all(_fixed_invariants_hold(by_id[k], v) for k, v in fixed_by_doc.items()),
+    )
+    t.check(
+        f"fixed chunks ≤ size+{FIXED_PARAMS.max_extend} chars",
+        all(len(c.text) <= FIXED_PARAMS.size + FIXED_PARAMS.max_extend for c in chunks["fixed"]),
+    )
+    t.check(
+        "sentence chunks equal `split_sentences(body)` and their spans reconstruct the body",
+        all(
+            [c.text for c in chunks["sentence"] if c.doc_id == d.doc_id]
+            == text.split_sentences(d.body)
+            and all(
+                d.body[c.char_start : c.char_end] == c.text
+                for c in chunks["sentence"]
+                if c.doc_id == d.doc_id
+            )
+            for d in docs
+        ),
+    )
+    for st in STRATEGIES:
+        top = results[st]
+        t.check(
+            f"`{names.for_strategy(st)}`: sample-query top-1 doc is `{SAMPLE_EXPECTED_DOC}` "
+            f"(similarity {top[0].similarity:.3f})",
+            top[0].doc_id == SAMPLE_EXPECTED_DOC,
+        )
+        t.check(
+            f"`{names.for_strategy(st)}`: 3 results sorted by similarity, descending",
+            len(top) == 3
+            and all(a.similarity >= b.similarity for a, b in zip(top, top[1:], strict=False)),
+        )
+
+
 GENERATORS: dict[str, tuple[str, Generator]] = {
     "01_dataset_report": ("Dataset report (Task 1)", dataset_report),
+    "02_kb_inventory": ("Knowledge-base inventory (Task 2)", kb_inventory),
+    "03_chunking_and_index": ("Chunking and Chroma index (Task 3)", chunking_and_index),
 }
 
 

@@ -17,7 +17,7 @@ step 2-3 "lint · typecheck · unit+contract";     ci/gate_fast.sh
 step 4  "integration";                          ci/run_layer.sh integration chroma
 step 5  "e2e";                                  ci/run_layer.sh e2e api-offline
 step 6  "security";                             ci/run_layer.sh security
-step 7  "golden";                               ci/run_layer.sh golden
+step 7  "golden";                               ci/run_layer.sh golden chroma indexer
 step 8  "offline proof";                        make --no-print-directory offline-proof
 step 9  "coverage threshold";                   echo "enforced in step 3 (pyproject fail_under)"
 step 10 "cold volume: down -v, rerun [4]–[5]"

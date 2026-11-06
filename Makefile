@@ -58,7 +58,7 @@ down: ## stop the stack (keeps volumes)
 logs: ## follow logs
 	$(COMPOSE) logs -f
 
-index: ## run the indexer one-shot
+index: build ## run the indexer one-shot (rebuilds first: the service runs the code baked into the image)
 	$(COMPOSE) run --rm -T indexer
 
 lint: ## ruff check + ruff format --check
@@ -90,7 +90,7 @@ test-security: ## security layer (canary, injection corpus, auth, offline)
 	ci/run_layer.sh security
 
 golden: ## regenerate deterministic artifacts into a temp dir and diff (from Phase 1)
-	ci/run_layer.sh golden
+	ci/run_layer.sh golden chroma indexer
 
 pii-scan: ## PII canary scan over every sink (§ARCH 11.6) — runs the whole security layer
 	ci/run_layer.sh security
@@ -98,6 +98,7 @@ pii-scan: ## PII canary scan over every sink (§ARCH 11.6) — runs the whole se
 offline-proof: ## egress probe from the backend network (+ graded scripts as they appear)
 	$(RUN_TESTS) python -m scripts.offline_probe
 	$(RUN_TOOLS) python -m scripts.offline_probe
+	$(COMPOSE) run --rm -T indexer
 	$(RUN_TOOLS) python -m scripts.validate_dataset
 	$(RUN_TOOLS) python -m scripts.make_transcripts --out /tmp/transcripts
 
@@ -115,9 +116,10 @@ gate-fast: ## lint + typecheck + unit + contract (+ coverage)
 gate: ## the full regression gate (§PLAN 3); log in artifacts/gate-<phase>.log
 	ci/gate.sh $(PHASE)
 
-# The runner executes the code baked into credagent:runtime, so rebuild first (cached).
+# The runner executes the code baked into credagent:runtime, so rebuild first (cached), and
+# transcripts 03+ read the index back, so `index` (which depends on build) runs first.
 # Provenance for the transcript header (§ARCH 7.19) is read after the build.
-transcripts: build ## regenerate transcripts/ in the runner (backend network only)
+transcripts: index ## regenerate transcripts/ in the runner (backend network only)
 	$(COMPOSE) --profile tools run --rm --no-deps -T \
 	  -e GIT_SHA="$$(git rev-parse HEAD)$$(git diff --quiet HEAD -- || echo +dirty)" \
 	  -e IMAGE_ID="$$(docker image inspect --format '{{.Id}}' credagent:runtime)" \
