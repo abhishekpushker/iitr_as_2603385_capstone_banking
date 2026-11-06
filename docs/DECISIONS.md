@@ -277,3 +277,56 @@ in one call, in chunk order, so the stored vectors are reproducible. Similaritie
 Per D-015 that comparison cannot hold (the server reports `1.0.0`), and the human chose the
 HttpClient round-trip test instead. Phase 2 adds no version-string test.
 `test_client_and_server_interoperate_over_http` keeps covering P8 in the integration layer.
+
+### D-024 Phase 3 implementation details within §ARCH 7.5, 7.8, 7.15
+* **Layering**: `observability` (metrics now, the JSON log formatter in Phase 10) is a rank-0
+  leaf, because `rag` (retrieval/embedding counters) and `cache` both increment counters. The
+  Phase 10 `PiiScrubFilter` needs `PiiMasker` (guardrails, rank 2), so the masker will be
+  injected into the formatter, not imported.
+* **LLMClient**: `rag` may not import `llm`, so `rag/generator.py` defines the `LLMClient`
+  protocol and `GroundedGenerator`. Its mock is `llm.engine.MockEngine`, which callers inject.
+  `generate_grounded(query, chunks, *, threshold)` takes the top-1 from the chunks (−1.0 when
+  there are none). Every client call, fallback included, counts one `generation_calls`.
+* **Sentence selection**: `MIN_SENTENCE_SCORE = SIMILARITY_WEIGHT = 0.3`, so similarity alone
+  (≤ 1) can never select a sentence: it must share at least one query token. If no sentence
+  qualifies, the answer is the fallback with `grounded=False`. Dedupe is by normalised text (the
+  higher-ranked copy wins), plus containment: a fixed-chunk fragment contained in another
+  context sentence is dropped (P16). "Document order" is (order of the document's first
+  appearance by rank, chunk `char_start` + sentence offset), so `RetrievedChunk` now carries
+  `char_start` from the chunk metadata. Similarities are clamped to [−1, 1] (float32 distance).
+* **Support rule**: token recall is computed against each context sentence and the best one is
+  kept. A sentence with no content tokens makes no claim (recall 1.0), and an empty answer has
+  ratio 1.0. Numbers are compared canonically (`₹1.5 lakh` = `₹150,000`) over all of C.
+* **Calibration**: 10 in-scope and 8 OOS queries (near-domain traps: share price, mutual fund,
+  USD/INR rate, fixed-deposit interest, a poem about loans). The gate applies to
+  `GATED_STRATEGY = "sentence"`. If Phase 4 deploys `fixed`, its own gap must reach 0.05 first
+  (measured 0.033). A collection with gap ≤ 0 gets `threshold: null`. Similarities are stored
+  to 4 decimals. `deployed_strategy` stays `null` until Phase 4. The script refuses to write
+  the file when the gated gap is below `MIN_GAP`. `RETRIEVAL_CONFIG_PATH` is a new setting
+  (`/app/config/retrieval.json`), and the runner mounts `./config` so `make calibrate` can
+  write it.
+* **Cache**: `normalize_query` = `text.normalize` → typographic quotes to ASCII → strip edge
+  whitespace/Unicode punctuation (Hypothesis proves idempotence). Values are computed outside
+  the lock; concurrent misses may compute twice (deterministic, harmless). Exceptions propagate
+  and are never stored. TTL expiry is inclusive at `put_time + ttl`. Not yet wired into
+  `RagTool` (Phase 6).
+* **Coverage gate**: `fail_under = 90` (combined) plus `scripts/coverage_gate.py`, which
+  checks line ≥ 90 % and branch ≥ 85 % separately from `coverage json` in the same container.
+
+### D-025 Calibration revision 1: kb-04 wording (the only revision)
+First measurement: the sentence collection had min_in 0.497 ("Which documents are required for
+KYC?") against max_oos 0.480 (fixed-deposit trap), a gap of 0.017. kb-04's sentences never
+said "KYC documents" (only the title did, and the title is not embedded). It was reworded,
+keeping every fact: "For KYC, a PAN is mandatory …" and "one address proof as a KYC document".
+The query sets were written before measuring and were not changed. Result on `kb_sentence_v1`:
+max_oos 0.480, min_in 0.654, gap 0.175, threshold 0.567. `kb_fixed_v1` measured gap 0.033
+(below 0.05; reported, not gated).
+
+### D-026 Groundedness demo query (§ARCH 7.12.3) verified, with a thin margin
+"What is the gold-loan late payment penalty?" has top-1 0.555 (kb-08) on `kb_sentence_v1`,
+below the 0.567 threshold. It stays the transcript-15 case, and transcript 04 checks it. The
+margin is only 0.012, smaller than the 0.05 calibration margin, so any KB or threshold change
+can flip it. Transcript 04's check will then fail loudly, and the case must be re-chosen.
+Held-out honesty set (§ARCH 11.4): 8/10 grounded with the right top-1 doc. Top-1 doc is
+correct on 10/10. The two misses ("first instalment due" 0.469, "withdrawing cash on the card"
+0.505) fall below the threshold and get the fallback, not a wrong answer.
