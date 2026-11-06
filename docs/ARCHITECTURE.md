@@ -175,7 +175,7 @@ E2E tests target **`api-offline`**, not `api`. That way every graded HTTP/WS int
 `chroma-data` (vectors, persists across restarts), `logs` (JSONL). Dataset and KB live in the image (immutable, versioned with git).
 
 ### 3.5 Startup sequence and readiness
-`chroma` healthy → `indexer` upserts both collections, writes `kb_version` (sha256 over KB files + chunk params) into a `_meta` collection, and exits 0 → `api` starts. Steps: load settings → assert `MOCK_LLM` → load the embedder from local path → connect to Chroma (bounded retry: 10 attempts, exponential backoff capped at 5 s) → assert both collections exist with the expected count and `kb_version` → mark ready. `/healthz` = process alive. `/readyz` = embedder loaded + Chroma reachable + collections valid.
+`chroma` healthy → `indexer` upserts both collections, writes `kb_version` (sha256 over KB files + chunk params) into a `kb_meta` collection (*amended, D-019:* Chroma rejects the name `_meta`), and exits 0 → `api` starts. Steps: load settings → assert `MOCK_LLM` → load the embedder from local path → connect to Chroma (bounded retry: 10 attempts, exponential backoff capped at 5 s) → assert both collections exist with the expected count and `kb_version` → mark ready. `/healthz` = process alive. `/readyz` = embedder loaded + Chroma reachable + collections valid.
 
 If the Chroma image has no shell or HTTP tool for a container healthcheck, use `depends_on: service_started` and rely on the indexer's retry loop. Record which one was used in `DECISIONS.md`.
 
@@ -336,7 +336,7 @@ Both strategies are pure functions `(doc: KbDocument, params) -> list[Chunk]`, w
 ### 7.4 Embeddings and vector store
 - `rag/embedder.py`: `Embedder` wraps `SentenceTransformer(EMBED_MODEL_PATH, device="cpu")`. `encode(texts) -> list[list[float]]` with `normalize_embeddings=True` and `batch_size=32`. A process-wide singleton guarded by a `threading.Lock` (encode is serialised: cheap at this scale and avoids torch thread contention). `torch.set_num_threads(1)`.
 - `rag/store.py`: `VectorStore` over `chromadb.HttpClient(host, port, settings=Settings(anonymized_telemetry=False))` in prod and `chromadb.EphemeralClient(...)` in unit tests. **Same class, injected client.** Collections are created with `get_or_create_collection(name, embedding_function=None, configuration={"hnsw": {"space": "cosine"}}, metadata={...})`. Always `upsert(ids, embeddings, documents, metadatas)`. Query returns `RetrievedChunk{chunk_id, doc_id, text, similarity = 1 - distance, rank}`, sorted by similarity desc, tie-broken by `chunk_id` for determinism.
-- `scripts/indexer.py`: load KB → chunk both ways → embed → upsert into `kb_fixed_v1` and `kb_sentence_v1` → delete stale ids no longer produced (so a changed KB never leaves orphan chunks) → write `_meta` → print counts. Running it twice yields identical counts and ids (integration test).
+- `scripts/indexer.py`: load KB → chunk both ways → embed → upsert into `kb_fixed_v1` and `kb_sentence_v1` → delete stale ids no longer produced (so a changed KB never leaves orphan chunks) → write `kb_meta` (D-019) → print counts. Running it twice yields identical counts and ids (integration test).
 
 ### 7.5 Retrieval, threshold calibration, grounded generation (Task 4)
 - `Retriever.retrieve(query, strategy, k=TOP_K) -> RetrievalResult{chunks, top1_similarity, strategy}`.

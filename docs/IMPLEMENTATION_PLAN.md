@@ -118,7 +118,7 @@ Tests first:
 - `test_kb.py`: 13 docs; the 12 required topics present (topic→doc map); each body 2–5 sentences; front matter schema; unique ids; disclaimer present; the facts from the content contract present (keyword checks per doc).
 - `test_chunking.py`: deterministic ids; fixed-size coverage/overlap/word-boundary invariants (+ Hypothesis); one sentence per sentence-chunk; char spans reconstruct the source.
 - `test_embedder.py`: dim 384; normalised (‖v‖≈1); deterministic across two calls (exact equality on the same process, `allclose 1e-6` across processes).
-- `tests/integration/test_index.py`: both collections exist with the expected counts; re-run of the indexer → same ids/counts (idempotent); orphan cleanup after a doc is removed in a temp KB; `_meta.kb_version` stable; a sample query returns a sensible top doc in **both** collections.
+- `tests/integration/test_index.py`: both collections exist with the expected counts; re-run of the indexer → same ids/counts (idempotent); orphan cleanup after a doc is removed in a temp KB; `kb_meta.kb_version` stable (D-019); a sample query returns a sensible top doc in **both** collections.
 **Exit gate:** full gate incl. cold-volume rerun; transcripts 02 and 03. Tag.
 
 ### Phase 3 — Retrieval, calibration, grounded generation, cache core (Tasks 4, 16-core) (Day 4–5)

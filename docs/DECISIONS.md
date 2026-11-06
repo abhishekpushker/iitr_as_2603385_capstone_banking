@@ -202,3 +202,78 @@ Approved 10, Rejected 13, Disbursed 9. Fraud-flagged 10/60 = 16.67%. sha256
 `92fd6e6696e4437ed8fefe7b2333a9700dfd46ddfcf411f1744231724d39946e`, pinned in
 `tests/unit/test_dataset.py::GOLDEN_SHA256`. Transcript 01 recomputes this table on every run,
 and `test_seed_is_the_first_valid_seed_from_the_start` enforces it.
+
+## Phase 2 — knowledge base, chunking, embeddings, indexing (2026-11-07)
+
+### D-019 The metadata collection is `kb_meta`, not `_meta`
+chromadb 1.5.9 rejects `_meta`: collection names must be 3–512 characters of `[a-zA-Z0-9._-]`
+and must **start and end** with `[a-zA-Z0-9]`. Pinned by
+`tests/contract/test_chroma_contract.py::test_collection_names_must_start_and_end_alphanumeric`.
+Escalated per the stop rule. **Decided by the human (2026-11-07): `kb_meta`**, configured as
+`Settings.collection_meta` (`COLLECTION_META`). The collection holds one record, id `kb_meta`,
+whose metadata carries `kb_version`, both collection names and counts, the doc count and the
+chunk params as JSON. Chroma requires a document and an embedding on every record (also pinned
+by a contract test), so the record has the document `kb_meta` and the 1-dimensional embedding
+`[1.0]`. §ARCH 3.5 and 7.4 and §PLAN Phase 2 are amended.
+
+### D-020 Indexer readiness: healthcheck plus a bounded connect retry
+The Chroma image has a working healthcheck (bash `/dev/tcp`, D-004), so `indexer` keeps
+`depends_on: chroma: service_healthy` and `api`/`api-offline` keep
+`indexer: service_completed_successfully`. §ARCH 3.5's bounded retry is still implemented, as
+`credagent.rag.store.connect_http` (10 attempts, sleeps 0.5, 1, 2, 4, then 5 s; settings
+`CHROMA_CONNECT_ATTEMPTS`, `CHROMA_BACKOFF_CAP_S`). The indexer and the transcripts use it now;
+the API will use it in Phase 10. It is a startup guard, not a test retry: unit tests drive it
+with an injected `sleep` and never wait.
+
+### D-021 Embedding determinism: bit-identical per batch, ~1e-7 across batch compositions
+The same texts in the same batch give bit-identical vectors (single torch thread). The same text
+embedded alone and inside a larger batch differs by up to ~6e-8, because padding changes the
+float32 arithmetic. Pinned by `tests/contract/test_sentence_transformers_contract.py`. Across
+processes the plan's `allclose 1e-6` applies. The indexer always embeds each strategy's chunks
+in one call, in chunk order, so the stored vectors are reproducible. Similarities are printed to
+3 decimals, and §ARCH 7.19's ≥ 0.05 threshold margin absorbs this drift.
+
+### D-022 Phase 2 implementation details within §ARCH 7.2–7.4
+* **KB files**: front matter has exactly `doc_id, title, topic, version: 1, disclaimer`. The body
+  is one prose paragraph. The loader collapses whitespace and NFKC-normalises, so char spans
+  refer to the normalised single-line body. `doc_id` must equal the file stem, and the
+  `topic` strings are the brief's 12 topic names plus `Status meanings & SLAs`.
+* **Splitter** (`text.sentence_spans`): a terminator (`.`, `!`, `?`, `...`, `…`, plus closing
+  quotes/brackets) ends a sentence only when followed by the end of text or by whitespace and an
+  uppercase letter, digit, `₹` or opening quote. A period after an abbreviation in
+  `ABBREVIATIONS` never ends a sentence, except for `SENTENCE_FINAL_ABBREVIATIONS`
+  (`p.a`, `etc`, `a.m`, `p.m`), which do when an uppercase letter follows (`… 9.9% p.a. Auto
+  loans …` is two sentences). A blank line is a hard break.
+* **Tokens**: negations (`no`, `not`) are not stopwords, so "no prepayment penalty" never
+  matches "prepayment penalty" on tokens alone. Single letters are dropped.
+* **Numbers**: lakh/lac/crore (singular or plural) multiply the preceding number; digit grouping
+  (Western or Indian) is removed; a `%` directly after or one space after the number is kept.
+* **Fixed chunking**: the next window starts at the last word start at or before
+  `end − overlap` inside the current chunk, else at the chunk's last word start. Overlap is
+  therefore 40 characters plus up to one word. A single word longer than `size + max_extend`
+  stays whole as its own chunk (never split). Such a chunk cannot overlap its successor, which
+  is the only exception to the overlap invariant; the Hypothesis test states that precondition.
+* **kb_version** (`credagent.kb.version`): sha256 over each KB file's name and bytes in name
+  order, then the JSON of `chunk_params()` (fixed params + the splitter's abbreviation lists).
+* **Chunk metadata**: `doc_id, strategy, index, char_start, char_end, kb_version, title`.
+  Stale ids are computed per collection as stored ids − produced ids and deleted after the upsert.
+* **Settings** added: `KB_DIR` (`/app/kb`), `EMBED_BATCH_SIZE` (32), `COLLECTION_META`,
+  `CHROMA_CONNECT_ATTEMPTS`, `CHROMA_BACKOFF_CAP_S`. The chunk parameters are design constants
+  in `kb/chunking.py`, not environment settings; they reach `config/retrieval.json` in Phase 3.
+* **Layering**: besides rank order, `kb` may not import `rag`/`llm`/`crew`/`pipeline`/`api`, and
+  `rag` may not import `llm`/`crew`/`pipeline`/`api` (`test_static_rules.py`). Scripts read the
+  environment only through settings.
+* **Make/CI wiring**: `make index` depends on `build`, because the service runs the code baked
+  into the image. `make transcripts` depends on `index`, since transcript 03 reads the index back.
+  The golden layer runs as `ci/run_layer.sh golden chroma indexer`; `run_layer.sh` runs
+  `indexer` to completion with `compose run` instead of `up --wait`. `make offline-proof` also
+  runs the indexer on the backend network.
+* **Hypothesis**: profile `credagent` (no example database because the mount is read-only;
+  `deadline=None` so results never depend on machine load; 200 examples), seeded by
+  pytest-randomly.
+
+### D-023 Integration test for the server/client version (P8) stays replaced
+§PLAN Phase 2 and the Phase 2 brief list "Chroma server version == client version (1.5.9)".
+Per D-015 that comparison cannot hold (the server reports `1.0.0`), and the human chose the
+HttpClient round-trip test instead. Phase 2 adds no version-string test.
+`test_client_and_server_interoperate_over_http` keeps covering P8 in the integration layer.
