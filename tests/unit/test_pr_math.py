@@ -271,11 +271,78 @@ def test_choose_needs_two_strategies(results: dict[str, ev.CollectionEvaluation]
         ev.choose({"sentence": results["sentence"]})
 
 
-# --------------------------------------------------------------------------- recommendation
+# --------------------------------------------------------------------------- eligibility (D-028)
 
 CALIB_OK = ev.CalibrationSummary(threshold=0.567, gap=0.1746, meets_min_gap=True)
 CALIB_LOW = ev.CalibrationSummary(threshold=0.49, gap=0.0329, meets_min_gap=False)
+CALIB_OK_FIXED = ev.CalibrationSummary(threshold=0.52, gap=0.08, meets_min_gap=True)
+BOTH_OK = {"sentence": CALIB_OK, "fixed": CALIB_OK_FIXED}
+FIXED_LOW = {"sentence": CALIB_OK, "fixed": CALIB_LOW}  # the Phase-3 measurement
 DECIMAL = re.compile(r"\d+\.\d+")
+
+
+def _tied_pr_fixed_higher_top1() -> dict[str, ev.CollectionEvaluation]:
+    """The measured Phase-4 shape: identical P/R, fixed ahead on mean top-1 by 0.01."""
+    fake = _uniform({"fixed": 0.81, "sentence": 0.80}, {"fixed": ["kb-06"], "sentence": ["kb-06"]})
+    return ev.evaluate(fake, top_k=3, queries=(Q_CLOSE,))
+
+
+def test_ineligible_strategy_is_excluded_before_the_tie_break_chain() -> None:
+    out = _tied_pr_fixed_higher_top1()
+    assert ev.choose(out).winner == "fixed"  # the unfiltered chain would pick fixed
+    assert ev.choose(out, calibrations=FIXED_LOW) == ev.Choice(
+        "sentence", "fixed", "only_eligible", excluded=("fixed",)
+    )
+
+
+def test_exclusion_overrides_a_better_p_r(results: dict[str, ev.CollectionEvaluation]) -> None:
+    calibs = {"sentence": CALIB_LOW, "fixed": CALIB_OK_FIXED}
+    assert ev.choose(results).winner == "sentence"  # sentence has the higher macro F1
+    assert ev.choose(results, calibrations=calibs) == ev.Choice(
+        "fixed", "sentence", "only_eligible", excluded=("sentence",)
+    )
+
+
+def test_all_eligible_keeps_the_chain_unchanged(
+    results: dict[str, ev.CollectionEvaluation],
+) -> None:
+    assert ev.choose(results, calibrations=BOTH_OK) == ev.choose(results)
+    out = _tied_pr_fixed_higher_top1()
+    assert ev.choose(out, calibrations=BOTH_OK) == ev.Choice("fixed", "sentence", "mean_top1")
+
+
+def test_no_eligible_strategy_raises(results: dict[str, ev.CollectionEvaluation]) -> None:
+    with pytest.raises(ev.NoEligibleStrategyError, match=r"0\.033.*0\.05|fixed"):
+        ev.choose(results, calibrations={"sentence": CALIB_LOW, "fixed": CALIB_LOW})
+    assert issubclass(ev.NoEligibleStrategyError, ev.NotDeployableError)
+
+
+def test_missing_calibration_counts_as_ineligible(
+    results: dict[str, ev.CollectionEvaluation],
+) -> None:
+    calibs = {"fixed": CALIB_OK_FIXED}
+    choice = ev.choose(results, calibrations=calibs)
+    assert choice == ev.Choice("fixed", "sentence", "only_eligible", excluded=("sentence",))
+    rec = ev.recommendation(results, choice, calibs, min_gap=0.05, top_k=3)
+    assert "`sentence` is excluded before the P/R comparison because it has no calibration" in rec
+    with pytest.raises(ev.NoEligibleStrategyError, match="fixed uncalibrated"):
+        ev.choose(results, calibrations={})
+
+
+def test_recommendation_states_the_eligibility_filter_with_measured_numbers() -> None:
+    out = _tied_pr_fixed_higher_top1()
+    choice = ev.choose(out, calibrations=FIXED_LOW)
+    rec = ev.recommendation(out, choice, FIXED_LOW, min_gap=0.05, top_k=3)
+    w, lo = out["sentence"], out["fixed"]
+    assert 2 <= len(text.split_sentences(rec)) <= 3
+    assert "`fixed`" in rec and "excluded" in rec and "`sentence`" in rec
+    assert DECIMAL.findall(rec) == [
+        _f(w.macro_precision), _f(w.macro_recall), _f(lo.macro_precision), _f(lo.macro_recall),
+        "0.033", "0.05", "0.175", "0.05", "0.567",
+    ]  # fmt: skip
+    report = ev.render_report(out, choice, rec, top_k=3)
+    assert "Excluded before the comparison" in report and "`kb_fixed_v1`" in report
+    assert lo.macro_precision_arithmetic in report  # P/R of the excluded collection still shown
 
 
 def _f(x: Fraction | float) -> str:
@@ -285,8 +352,8 @@ def _f(x: Fraction | float) -> str:
 def test_recommendation_numbers_parse_back_to_the_measured_values(
     results: dict[str, ev.CollectionEvaluation],
 ) -> None:
-    choice = ev.choose(results)
-    rec = ev.recommendation(results, choice, CALIB_OK, min_gap=0.05, top_k=3)
+    choice = ev.choose(results, calibrations=BOTH_OK)
+    rec = ev.recommendation(results, choice, BOTH_OK, min_gap=0.05, top_k=3)
     w, lo = results["sentence"], results["fixed"]
     assert 2 <= len(text.split_sentences(rec)) <= 3
     assert "`sentence`" in rec and "`kb_sentence_v1`" in rec and "`fixed`" in rec
@@ -312,7 +379,7 @@ def test_recommendation_names_the_tie_breaker(
     results: dict[str, ev.CollectionEvaluation], decided_by: Any, phrase: str
 ) -> None:
     rec = ev.recommendation(
-        results, ev.Choice("sentence", "fixed", decided_by), CALIB_OK, min_gap=0.05, top_k=3
+        results, ev.Choice("sentence", "fixed", decided_by), BOTH_OK, min_gap=0.05, top_k=3
     )
     assert phrase in rec and "tie" in rec
     assert 2 <= len(text.split_sentences(rec)) <= 3
@@ -328,7 +395,7 @@ def test_recommendation_refuses_a_winner_below_the_minimum_gap(
     results: dict[str, ev.CollectionEvaluation],
 ) -> None:
     rec = ev.recommendation(
-        results, ev.Choice("fixed", "sentence", "macro_f1"), CALIB_LOW, min_gap=0.05, top_k=3
+        results, ev.Choice("fixed", "sentence", "macro_f1"), FIXED_LOW, min_gap=0.05, top_k=3
     )
     assert "below the 0.05 minimum" in rec and "not deployed" in rec
     assert DECIMAL.findall(rec)[-2:] == ["0.033", "0.05"]
@@ -340,9 +407,10 @@ def test_recommendation_refuses_a_winner_below_the_minimum_gap(
 def test_report_contains_the_literal_arithmetic(
     results: dict[str, ev.CollectionEvaluation],
 ) -> None:
-    choice = ev.choose(results)
-    rec = ev.recommendation(results, choice, CALIB_OK, min_gap=0.05, top_k=3)
+    choice = ev.choose(results, calibrations=BOTH_OK)
+    rec = ev.recommendation(results, choice, BOTH_OK, min_gap=0.05, top_k=3)
     report = ev.render_report(results, choice, rec, top_k=3)
+    assert "Excluded before the comparison" not in report
     for c in results.values():
         assert f"`{c.collection}`" in report
         for qe in c.queries:

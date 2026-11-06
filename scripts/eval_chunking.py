@@ -2,9 +2,9 @@
 
 `python -m scripts.eval_chunking`. Runs the P/R queries through the production retriever on both
 collections, prints and writes the report (`eval/results/chunking_pr.md`), and sets
-`deployed_strategy` in `config/retrieval.json`. It changes nothing and exits 1 if the config was
-calibrated on another KB version, or if the winner's calibration gap is below `min_gap`
-(a stop-and-ask condition: never deploy a threshold without the margin).
+`deployed_strategy` in `config/retrieval.json`. Only strategies whose calibration gap meets
+`min_gap` compete (D-028). It changes nothing and exits 1 if the config was calibrated on another
+KB version, or if no strategy meets the gap (never deploy a threshold without the margin).
 """
 
 from __future__ import annotations
@@ -55,11 +55,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     )  # fmt: skip
     top_k = int(config["top_k"])
     results = ev.evaluate(retriever, top_k=top_k)
-    choice = ev.choose(results, gated=config["gated_strategy"])
+    calibrations = {st: ev.calibration_of(config, st) for st in results}
+    try:
+        choice = ev.choose(results, gated=config["gated_strategy"], calibrations=calibrations)
+    except ev.NoEligibleStrategyError as exc:
+        for c in results.values():
+            print(f"[{c.strategy}] {c.macro_precision_arithmetic}; {c.macro_recall_arithmetic}")
+        print(f"{exc}; {args.config} and {args.report} left unchanged", file=sys.stderr)
+        return 1
     rec = ev.recommendation(
-        results, choice, ev.calibration_of(config, choice.winner),
-        min_gap=float(config["min_gap"]), top_k=top_k,
-    )  # fmt: skip
+        results, choice, calibrations, min_gap=float(config["min_gap"]), top_k=top_k
+    )
     report = ev.render_report(results, choice, rec, top_k=top_k)
     print(report)
 

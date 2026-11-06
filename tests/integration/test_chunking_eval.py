@@ -58,7 +58,11 @@ def test_re_measurement_renders_an_identical_report(
     choice = ev.choose(results)
     assert ev.choose(again) == choice
     rec = ev.recommendation(
-        results, choice, ev.CalibrationSummary(0.5, 0.1, True), min_gap=0.05, top_k=3
+        results,
+        choice,
+        {s: ev.CalibrationSummary(0.5, 0.1, True) for s in results},
+        min_gap=0.05,
+        top_k=3,  # fmt: skip
     )
     assert ev.render_report(again, choice, rec, top_k=3) == ev.render_report(
         results, choice, rec, top_k=3
@@ -75,8 +79,9 @@ def test_script_deploys_the_winner(
 
     assert eval_chunking.main(["--config", str(config), "--report", str(report)]) == 0
     after = json.loads(config.read_text(encoding="utf-8"))
-    winner = ev.choose(results).winner
-    assert after["deployed_strategy"] == winner
+    calibs = {s: ev.calibration_of(before, s) for s in results}
+    winner = ev.choose(results, calibrations=calibs).winner
+    assert after["deployed_strategy"] == winner == "sentence"  # fixed gap 0.033 < 0.05 (D-028)
     assert after["collections"][winner]["meets_min_gap"] is True
     assert {k: v for k, v in after.items() if k != "deployed_strategy"} == {
         k: v for k, v in before.items() if k != "deployed_strategy"
@@ -89,6 +94,20 @@ def test_script_deploys_the_winner(
     first = (config.read_text(encoding="utf-8"), body)
     assert eval_chunking.main(["--config", str(config), "--report", str(report)]) == 0
     assert (config.read_text(encoding="utf-8"), report.read_text(encoding="utf-8")) == first
+
+
+def test_script_deploys_nothing_when_no_strategy_meets_the_gap(tmp_path: Path) -> None:
+    config, report = tmp_path / "retrieval.json", tmp_path / "chunking_pr.md"
+    assert calibrate_threshold.main(["--out", str(config)]) == 0
+    data = json.loads(config.read_text(encoding="utf-8"))
+    for c in data["collections"].values():
+        c["meets_min_gap"] = False
+    config.write_text(cal.dumps_config(data), encoding="utf-8")
+    before = config.read_text(encoding="utf-8")
+    assert eval_chunking.main(["--config", str(config), "--report", str(report)]) == 1
+    assert config.read_text(encoding="utf-8") == before
+    assert json.loads(before)["deployed_strategy"] is None
+    assert not report.exists()
 
 
 def test_script_refuses_a_config_from_another_kb_version(tmp_path: Path) -> None:

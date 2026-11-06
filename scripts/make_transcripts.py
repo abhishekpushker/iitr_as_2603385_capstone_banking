@@ -615,10 +615,11 @@ def chunking_precision_recall(t: Transcript) -> None:
     config = json.loads(committed)
     top_k = int(config["top_k"])
     results = ev.evaluate(_retriever(s), top_k=top_k)
-    choice = ev.choose(results, gated=config["gated_strategy"])
-    calib = ev.calibration_of(config, choice.winner)
+    calibrations = {st: ev.calibration_of(config, st) for st in results}
+    choice = ev.choose(results, gated=config["gated_strategy"], calibrations=calibrations)
+    calib = calibrations[choice.winner]
     min_gap = float(config["min_gap"])
-    rec = ev.recommendation(results, choice, calib, min_gap=min_gap, top_k=top_k)
+    rec = ev.recommendation(results, choice, calibrations, min_gap=min_gap, top_k=top_k)
     report = ev.render_report(results, choice, rec, top_k=top_k)
 
     t.section("Inputs")
@@ -628,8 +629,9 @@ def chunking_precision_recall(t: Transcript) -> None:
         f"the production `Retriever` (top-{top_k}, cosine) on **both** collections. Per query: "
         "top-k chunks → `doc_id` → deduplicated in rank order → `P = |rel ∩ ret| / |ret|`, "
         "`R = |rel ∩ ret| / |rel|` (`P := 0` and a warning when nothing is retrieved). Macro "
-        "averages per collection. Choice: higher macro F1, then higher mean top-1 similarity, "
-        "then fewer documents retrieved per query, then the gated strategy (D-027)."
+        "averages per collection. Only strategies whose calibration gap meets `min_gap` compete "
+        "(D-028); among those: higher macro F1, then higher mean top-1 similarity, then fewer "
+        "documents retrieved per query, then the gated strategy (D-027)."
     )
     t.table(
         ["#", "query", "relevant_doc_ids"],
@@ -658,8 +660,14 @@ def chunking_precision_recall(t: Transcript) -> None:
 
     t.section("Macro averages")
     t.table(ev.AVERAGE_HEADERS, ev.average_rows(results))
+    t.table(
+        ["strategy", "calibration gap", f"≥ min_gap {min_gap}", "competes"],
+        [[f"`{st}`", f"{c.gap:.3f}", "✔" if c.meets_min_gap else "✘",
+          "no" if st in choice.excluded else "yes"]
+         for st, c in sorted(calibrations.items())],
+    )  # fmt: skip
     t.para(
-        f"Winner: **`{choice.winner}`** (decided by `{choice.decided_by}`); runner-up "
+        f"Winner: **`{choice.winner}`** (decided by `{choice.decided_by}`); other collection "
         f"`{choice.runner_up}`."
     )
 
@@ -724,6 +732,13 @@ def chunking_precision_recall(t: Transcript) -> None:
             (w.macro_precision, w.macro_recall, lo.macro_precision, lo.macro_recall)]
         and f"{calib.gap:.3f}" in numbers,
     )  # fmt: skip
+    below = tuple(sorted(st for st, c in calibrations.items() if not c.meets_min_gap))
+    t.check(
+        "exactly the strategies below the calibration gap were excluded before the comparison ("
+        + (", ".join(f"`{st}` gap {calibrations[st].gap:.3f}" for st in below) or "none")
+        + ")",
+        choice.excluded == below and choice.winner not in below,
+    )
     t.check(
         f"winner `{choice.winner}` meets the calibration gap ({calib.gap:.3f} ≥ {min_gap})",
         calib.meets_min_gap and calib.gap >= min_gap,

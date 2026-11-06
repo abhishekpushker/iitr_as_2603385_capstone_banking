@@ -5,10 +5,12 @@ For each collection, every P/R query retrieves its top-k chunks. The chunks are 
 `R = |rel ∩ ret| / |rel|`. An empty retrieval defines `P = 0` and logs a warning; it must not
 happen for in-scope queries. P and R are exact `Fraction`s, so macro averages and ties are exact.
 
-Choice (D-027): the higher macro F1 (harmonic mean of macro P and macro R) wins. On a tie, the
-higher mean top-1 similarity (rounded to 4 decimals, as stored in `config/retrieval.json`)
-wins, then the fewer distinct documents retrieved per query, then the gated strategy. A winner
-whose calibration gap is below `MIN_GAP` is reported but never deployed (`NotDeployableError`).
+Eligibility (D-028): only strategies whose calibration meets `MIN_GAP` compete; the others are
+still measured and reported. If none is eligible, nothing is deployed (`NoEligibleStrategyError`).
+Choice among the eligible (D-027): the higher macro F1 (harmonic mean of macro P and macro R)
+wins. On a tie, the higher mean top-1 similarity (rounded to 4 decimals, as stored in
+`config/retrieval.json`) wins, then the fewer distinct documents retrieved per query, then the
+gated strategy. `deploy` refuses any strategy below `MIN_GAP` (`NotDeployableError`).
 
 The P/R queries are disjoint from the calibration queries (tests/unit/test_query_sets.py).
 """
@@ -176,31 +178,15 @@ def evaluate(
     return out
 
 
-DecidedBy = Literal["macro_f1", "mean_top1", "mean_docs", "gated"]
+DecidedBy = Literal["macro_f1", "mean_top1", "mean_docs", "gated", "only_eligible"]
 
 
-@dataclass(frozen=True)
-class Choice:
-    winner: Strategy
-    runner_up: Strategy
-    decided_by: DecidedBy
+class NotDeployableError(ValueError):
+    """The P/R winner's calibration gap is below MIN_GAP (a stop-and-ask condition)."""
 
 
-def choose(
-    results: Mapping[Strategy, CollectionEvaluation], *, gated: Strategy = GATED_STRATEGY
-) -> Choice:
-    if len(results) < _MIN_STRATEGIES:
-        raise ValueError("choosing a strategy needs at least two evaluated collections")
-
-    def key(c: CollectionEvaluation) -> tuple[Fraction, float, Fraction, bool]:
-        return (-c.macro_f1, -round(c.mean_top1, _TOP1_DECIMALS), c.mean_docs, c.strategy != gated)
-
-    first, second = sorted(results.values(), key=lambda c: (key(c), c.strategy))[:2]
-    names: tuple[DecidedBy, ...] = ("macro_f1", "mean_top1", "mean_docs", "gated")
-    a, b = key(first), key(second)
-    fallback: DecidedBy = "gated"  # unreachable for distinct strategies; keeps `next` total
-    decided_by = next((n for n, x, y in zip(names, a, b, strict=True) if x != y), fallback)
-    return Choice(first.strategy, second.strategy, decided_by)
+class NoEligibleStrategyError(NotDeployableError):
+    """No evaluated strategy meets the calibration gap: nothing may be deployed (D-028)."""
 
 
 @dataclass(frozen=True)
@@ -215,18 +201,88 @@ def calibration_of(config: Mapping[str, Any], strategy: Strategy) -> Calibration
     return CalibrationSummary(c["threshold"], float(c["gap"]), bool(c["meets_min_gap"]))
 
 
+@dataclass(frozen=True)
+class Choice:
+    winner: Strategy
+    runner_up: Strategy
+    decided_by: DecidedBy
+    excluded: tuple[Strategy, ...] = ()  # failed the calibration gap; never competed (D-028)
+
+
+def choose(
+    results: Mapping[Strategy, CollectionEvaluation],
+    *,
+    gated: Strategy = GATED_STRATEGY,
+    calibrations: Mapping[Strategy, CalibrationSummary] | None = None,
+) -> Choice:
+    """Eligibility filter (D-028), then the unchanged P/R + tie-break chain (D-027).
+
+    With `calibrations`, a strategy competes only if its calibration `meets_min_gap` (a missing
+    calibration counts as not meeting it). Without them, every strategy competes.
+    """
+    if len(results) < _MIN_STRATEGIES:
+        raise ValueError("choosing a strategy needs at least two evaluated collections")
+
+    def key(c: CollectionEvaluation) -> tuple[Fraction, float, Fraction, bool]:
+        return (-c.macro_f1, -round(c.mean_top1, _TOP1_DECIMALS), c.mean_docs, c.strategy != gated)
+
+    def ranked(cs: Iterable[CollectionEvaluation]) -> list[CollectionEvaluation]:
+        return sorted(cs, key=lambda c: (key(c), c.strategy))
+
+    def eligible(s: Strategy) -> bool:
+        if calibrations is None:
+            return True
+        c = calibrations.get(s)
+        return c is not None and c.meets_min_gap
+
+    excluded = tuple(sorted(s for s in results if not eligible(s)))
+    pool = ranked(c for s, c in results.items() if eligible(s))
+    if not pool:
+        gaps = ", ".join(
+            f"{s} gap {calibrations[s].gap:.3f}" if calibrations and s in calibrations else
+            f"{s} uncalibrated"
+            for s in excluded
+        )  # fmt: skip
+        raise NoEligibleStrategyError(f"no strategy meets the calibration gap ({gaps})")
+    if len(pool) == 1:
+        others = ranked(results[s] for s in excluded)
+        return Choice(pool[0].strategy, others[0].strategy, "only_eligible", excluded)
+
+    first, second = pool[:2]
+    names: tuple[DecidedBy, ...] = ("macro_f1", "mean_top1", "mean_docs", "gated")
+    a, b = key(first), key(second)
+    fallback: DecidedBy = "gated"  # unreachable for distinct strategies; keeps `next` total
+    decided_by = next((n for n, x, y in zip(names, a, b, strict=True) if x != y), fallback)
+    return Choice(first.strategy, second.strategy, decided_by, excluded)
+
+
+def _excluded_sentence(
+    w: CollectionEvaluation, lo: CollectionEvaluation, c: CalibrationSummary | None, min_gap: float
+) -> str:
+    why = (
+        f"its calibration gap of {_d(c.gap)} is below the {min_gap:.2f} minimum"
+        if c is not None
+        else "it has no calibration"
+    )
+    return (
+        f"`{lo.strategy}` is excluded before the P/R comparison because {why}, so "
+        f"`{w.strategy}` is the only eligible strategy."
+    )
+
+
 def recommendation(
     results: Mapping[Strategy, CollectionEvaluation],
     choice: Choice,
-    calibration: CalibrationSummary,
+    calibrations: Mapping[Strategy, CalibrationSummary],
     *,
     min_gap: float,
     top_k: int,
 ) -> str:
     """2–3 sentences from a fixed template, filled only with the measured numbers."""
     w, lo = results[choice.winner], results[choice.runner_up]
+    calibration = calibrations[choice.winner]
     first = (
-        f"`{w.strategy}` chunking (`{w.collection}`) retrieves best: across {len(w.queries)} "
+        f"`{w.strategy}` chunking (`{w.collection}`) is recommended: across {len(w.queries)} "
         f"in-scope queries at top-{top_k} it reached macro precision {_d(w.macro_precision)} "
         f"and macro recall {_d(w.macro_recall)}, against {_d(lo.macro_precision)} and "
         f"{_d(lo.macro_recall)} for `{lo.strategy}` (`{lo.collection}`)."
@@ -241,6 +297,7 @@ def recommendation(
         f"{_d(lo.mean_docs)} distinct documents retrieved per query.",
         "gated": f"Macro F1 ({_d(w.macro_f1)}), mean top-1 similarity ({_d(w.mean_top1)}) and "
         f"distinct documents per query ({_d(w.mean_docs)}) all tie, so the gated strategy is kept.",
+        "only_eligible": _excluded_sentence(w, lo, calibrations.get(lo.strategy), min_gap),
     }[choice.decided_by]
     if calibration.meets_min_gap and calibration.threshold is not None:
         third = (
@@ -310,6 +367,13 @@ def render_report(
         lines += [f"- `{c.macro_precision_arithmetic}`", f"- `{c.macro_recall_arithmetic}`", ""]
     lines += ["## Macro averages", ""]
     lines += _table(AVERAGE_HEADERS, average_rows(results))
+    if choice.excluded:
+        lines += [
+            "Excluded before the comparison (calibration gap below `min_gap`, D-028): "
+            + ", ".join(f"`{results[s].collection}` ({s})" for s in choice.excluded)
+            + ". Their P/R is reported above but they do not compete.",
+            "",
+        ]
     lines += [
         f"Winner: `{choice.winner}` (decided by `{choice.decided_by}`).",
         "",
@@ -318,10 +382,6 @@ def render_report(
         recommendation_text,
     ]
     return "\n".join(lines) + "\n"
-
-
-class NotDeployableError(ValueError):
-    """The P/R winner's calibration gap is below MIN_GAP (a stop-and-ask condition)."""
 
 
 def deploy(config: Mapping[str, Any], strategy: Strategy) -> dict[str, Any]:

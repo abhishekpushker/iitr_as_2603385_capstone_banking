@@ -331,7 +331,7 @@ Held-out honesty set (§ARCH 11.4): 8/10 grounded with the right top-1 doc. Top-
 correct on 10/10. The two misses ("first instalment due" 0.469, "withdrawing cash on the card"
 0.505) fall below the threshold and get the fallback, not a wrong answer.
 
-### D-027 Phase 4 chunking evaluation (§ARCH 7.6) — method; deployment PENDING human decision
+### D-027 Phase 4 chunking evaluation (§ARCH 7.6) — method (deployment resolved by D-028)
 * **Queries** (`evaluation.PR_QUERIES`, written before measuring, never tuned): the two §ARCH
   7.6 two-document examples (kb-11+kb-12, kb-07+kb-08) plus three single-document queries
   (kb-06, kb-09, kb-13). Registered in `tests/unit/test_query_sets.py`, so they are checked as
@@ -350,5 +350,23 @@ correct on 10/10. The two misses ("first instalment due" 0.469, "withdrawing cas
 * **Measured (top-3)**: both collections give per-query P/R that are identical, macro P = macro R
   = macro F1 = 0.900, and mean docs 1.400. Mean top-1 similarity is 0.655 (fixed) vs 0.654
   (sentence), so the rule picks **fixed**. Its calibration gap is 0.033 < 0.05, so it was not
-  deployed: a stop-and-ask condition. `deployed_strategy` stays `null` pending the human's
-  decision. Phase 4 is not tagged.
+  deployed: a stop-and-ask condition. Escalated to the human and resolved by D-028.
+
+### D-028 Only strategies that meet the calibration gap compete for deployment (human-approved)
+**Context:** under D-027's rule, the P/R comparison on the 5 queries tied exactly. Both
+collections had macro P = macro R = macro F1 = 0.900 and mean docs 1.400, so the result rested
+on mean top-1 similarity, 0.655 vs 0.654. That 0.001 margin is noise next to the 0.05 margin
+the project requires everywhere else (§ARCH 7.19). It selected `fixed`, whose calibration gap
+(0.033) is below `min_gap` (0.05), so `fixed` cannot be deployed.
+**Options escalated:** (a) keep the rule and revise the KB until `fixed` reaches the gap;
+(b) only strategies whose calibration meets `min_gap` compete; (c) treat sub-tolerance top-1
+differences as ties.
+**Decision (the user approved option b, 2026-11-07):** `choose(..., calibrations=…)` first
+excludes every strategy whose `meets_min_gap` is false (a missing calibration counts as false).
+The D-027 chain (macro F1 → mean top-1 → fewer docs → gated) then runs unchanged over the
+eligible set. With exactly one eligible strategy, `decided_by = "only_eligible"`. With none,
+`NoEligibleStrategyError` is raised: the script exits 1, and the config (with
+`deployed_strategy: null`) and the report stay untouched. Excluded collections are still
+measured and reported, and the recommendation states the exclusion with its measured gap.
+**Result:** `fixed` is excluded (gap 0.033 < 0.05), and `sentence` (gap 0.175, threshold 0.567)
+is deployed: `deployed_strategy: "sentence"`.
