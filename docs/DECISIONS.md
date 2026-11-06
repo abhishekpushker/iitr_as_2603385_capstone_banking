@@ -330,3 +330,25 @@ can flip it. Transcript 04's check will then fail loudly, and the case must be r
 Held-out honesty set (§ARCH 11.4): 8/10 grounded with the right top-1 doc. Top-1 doc is
 correct on 10/10. The two misses ("first instalment due" 0.469, "withdrawing cash on the card"
 0.505) fall below the threshold and get the fallback, not a wrong answer.
+
+### D-027 Phase 4 chunking evaluation (§ARCH 7.6) — method; deployment PENDING human decision
+* **Queries** (`evaluation.PR_QUERIES`, written before measuring, never tuned): the two §ARCH
+  7.6 two-document examples (kb-11+kb-12, kb-07+kb-08) plus three single-document queries
+  (kb-06, kb-09, kb-13). Registered in `tests/unit/test_query_sets.py`, so they are checked as
+  disjoint from the calibration set and absent from `src/credagent/llm/`.
+* **Math**: P and R are exact `Fraction`s; `P := 0` with a warning on an empty retrieval (the
+  query text is not logged). Gold ids must be non-empty and unique.
+* **Choice**: macro F1 (from macro P and macro R), then mean top-1 similarity rounded to 4
+  decimals, then fewer distinct docs per query, then the gated strategy. A winner whose
+  calibration `meets_min_gap` is false is reported but never deployed (`NotDeployableError`;
+  the script exits 1 and leaves both files unchanged).
+* **Ownership**: `make calibrate` writes `deployed_strategy: null`, and `make eval-chunking` sets
+  it, so `make bless` runs calibrate → eval-chunking → transcripts. Transcript 04's
+  byte-equality check now excludes `deployed_strategy`. The full byte equality moved to
+  `tests/golden/test_config.py` (calibrate + eval), and transcript 06 checks the deployment.
+  New setting `CHUNKING_REPORT_PATH` (`/app/eval/results/chunking_pr.md`).
+* **Measured (top-3)**: both collections give per-query P/R that are identical, macro P = macro R
+  = macro F1 = 0.900, and mean docs 1.400. Mean top-1 similarity is 0.655 (fixed) vs 0.654
+  (sentence), so the rule picks **fixed**. Its calibration gap is 0.033 < 0.05, so it was not
+  deployed: a stop-and-ask condition. `deployed_strategy` stays `null` pending the human's
+  decision. Phase 4 is not tagged.
