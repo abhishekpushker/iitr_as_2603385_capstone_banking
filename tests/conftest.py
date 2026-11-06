@@ -10,6 +10,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from hypothesis import settings
+
+# The repo is mounted read-only (no example database on disk). A wall-clock deadline would make
+# property tests depend on machine load, so it is off; runs are seeded by pytest-randomly.
+settings.register_profile("credagent", database=None, deadline=None, max_examples=200)
+settings.load_profile("credagent")
 
 TESTS_DIR = Path(__file__).resolve().parent
 LAYERS = ("unit", "contract", "integration", "e2e", "security", "golden")
