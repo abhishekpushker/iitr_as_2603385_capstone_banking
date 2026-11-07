@@ -15,14 +15,22 @@ from collections import Counter
 from collections.abc import Callable, Sequence
 from fractions import Fraction
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, get_args
 
 from pydantic import ValidationError
 
 import dataset
 from credagent import text
-from credagent.cache.response_cache import normalize_query
-from credagent.context import ToolCallLedger
+from credagent.cache.response_cache import ResponseCache, normalize_query
+from credagent.context import RequestContext, ToolCallLedger
+from credagent.crew.factory import (
+    CrewDeps,
+    SchemaViolation,
+    build_crew,
+    parse_crew_output,
+    run_crew,
+)
 from credagent.kb.chunking import FIXED_PARAMS, STRATEGIES, Chunk, chunk_document, chunk_params
 from credagent.kb.loader import DISCLAIMER, KbDocument, load_kb
 from credagent.kb.version import kb_version
@@ -34,9 +42,16 @@ from credagent.rag.embedder import get_embedder
 from credagent.rag.generator import GroundedGenerator
 from credagent.rag.retriever import Retriever, collections_from_settings
 from credagent.rag.store import VectorStore, connect_http
-from credagent.schemas import FALLBACK_ANSWER, LOAN_STATUS_OUTPUT, LoanCategory, LoanStatus
+from credagent.schemas import (
+    FALLBACK_ANSWER,
+    LOAN_STATUS_OUTPUT,
+    CrewResponse,
+    LoanCategory,
+    LoanStatus,
+)
 from credagent.settings import Settings, get_settings
 from credagent.tools import escalation as esc
+from credagent.tools.acl import audit_crew
 from credagent.tools.lookup_tool import LoanStatusTool
 from scripts import validate_dataset
 from scripts.indexer import CollectionNames
@@ -949,6 +964,338 @@ def _sample_lookups(
     )
 
 
+# ------------------------------------------------------------------ crew transcripts (Phase 6)
+CREW_POLICY_QUERY = "Is there a prepayment penalty on a floating-rate home loan?"
+CREW_STATUS_QUERY = "What is the status of application LA-0007?"
+CREW_MIXED_QUERY = (
+    "What is the status of LA-0007, and is there a prepayment penalty on a home loan?"
+)
+CREW_UNKNOWN_QUERY = "What is the status of application LA-9999?"
+CREW_CLARIFY_QUERY = "What is the status of my application?"
+NUDGE = "Analyze the tool result."  # start of CrewAI's post_tool_reasoning (en.json)
+
+
+class CrewRun:
+    """One kickoff on a fresh crew with a fixed trace id (so prompts, and so token counts, are
+    reproducible)."""
+
+    def __init__(
+        self, deps: CrewDeps, query: str, trace_id: str, max_tokens: int | None = None
+    ) -> None:
+        self.query = query
+        self.ctx = RequestContext.new(session_id=trace_id, trace_id=trace_id, max_tokens=max_tokens)
+        self.crew = build_crew(self.ctx, query, deps)
+        self.result = run_crew(self.crew)
+        self.response = parse_crew_output(self.result)
+
+    @property
+    def agents(self) -> list[Any]:
+        """The built agents (typed `Any`: CrewAI types them as `BaseAgent`)."""
+        return list(self.crew.agents)
+
+    @property
+    def tools(self) -> list[tuple[str, str]]:
+        return [(e.agent, e.tool) for e in self.ctx.ledger.entries()]
+
+    @property
+    def outputs(self) -> list[str]:
+        return [o.raw for o in self.result.tasks_output]
+
+    def clean(self) -> bool:
+        """No output contains a CrewAI stop word or the post-tool nudge (P3)."""
+        return all("Observation:" not in o and NUDGE not in o for o in self.outputs)
+
+
+def _display(data: Any) -> str:
+    """Pretty JSON with floats rounded to 3 decimals: the printed form must not depend on float
+    noise across machines (plan risk register)."""
+
+    def rounded(x: Any) -> Any:
+        if isinstance(x, float):
+            return round(x, 3)
+        if isinstance(x, dict):
+            return {k: rounded(v) for k, v in x.items()}
+        if isinstance(x, list):
+            return [rounded(v) for v in x]
+        return x
+
+    return json.dumps(rounded(data), indent=2, ensure_ascii=False)
+
+
+def _type_name(annotation: Any) -> str:
+    name = getattr(annotation, "__name__", None) if isinstance(annotation, type) else None
+    return name or str(annotation).replace("typing.", "").replace("credagent.schemas.", "")
+
+
+def _crew_deps(s: Settings) -> CrewDeps:
+    metrics = Metrics()
+    return CrewDeps(
+        retrieval_config=cal.load_retrieval_config(s.retrieval_config_path),
+        retriever=_retriever(s), cache=ResponseCache(64, 3600, metrics=metrics), metrics=metrics,
+    )  # fmt: skip
+
+
+def _crew_wiring(t: Transcript, run: CrewRun) -> None:
+    t.section("Crew wiring (built fresh for this request)")
+    t.table(
+        ["agent (role)", "persona", "tools", "cache", "allow_delegation", "max_iter",
+         "max_retry_limit", "LLM"],
+        [[a.role, a.llm.persona, ", ".join(f"`{x.name}`" for x in a.tools) or "—", a.cache,
+          a.allow_delegation, a.max_iter, a.max_retry_limit,
+          f"`{type(a.llm).__name__}` (function calling: {a.llm.supports_function_calling()})"]
+         for a in run.agents],
+    )  # fmt: skip
+    t.table(
+        ["task", "agent", "context", "output_pydantic"],
+        [[i, task.agent.role if task.agent else "—",
+          ", ".join(f"task {run.crew.tasks.index(c) + 1}"
+                    for c in (task.context if isinstance(task.context, list) else [])) or "—",
+          task.output_pydantic.__name__ if task.output_pydantic else "—"]
+         for i, task in enumerate(run.crew.tasks, start=1)],
+    )  # fmt: skip
+    t.para(
+        f"Crew: `process={run.crew.process.value}`, `cache={run.crew.cache}`, "
+        f"`memory={run.crew.memory}`, `planning={run.crew.planning}`. "
+        f"`audit_crew` tool map: `{json.dumps(audit_crew(run.crew))}`"
+    )
+
+
+def _crew_run_report(t: Transcript, run: CrewRun, heading: str) -> None:
+    t.section(heading)
+    t.para(f"**Query (masked):** {run.query}")
+    t.para("Tool-call ledger (`ctx.ledger`):")
+    t.table(
+        ["#", "agent", "tool", "args", "cache_hit"],
+        [[i, e.agent, f"`{e.tool}`", f"`{json.dumps(e.args, ensure_ascii=False)}`", e.cache_hit]
+         for i, e in enumerate(run.ctx.ledger.entries(), start=1)] or [["—", "—", "—", "—", "—"]],
+    )  # fmt: skip
+    calls, tokens = run.ctx.budget.calls(), run.ctx.budget.tokens_by_persona()
+    t.para("LLM calls per agent (`BudgetMeter`, `ceil(chars/4)` tokens per call):")
+    t.table(
+        ["agent", "persona", "LLM calls", "tokens charged"],
+        [[a.role, a.llm.persona, calls.get(a.llm.persona, 0), tokens.get(a.llm.persona, 0)]
+         for a in run.agents]
+        + [["**total**", "", sum(calls.values()), run.ctx.budget.used_tokens]],
+    )  # fmt: skip
+    for task, raw in zip(("Retrieval", "Lookup"), run.outputs[:2], strict=True):
+        t.para(f"{task} task output (raw Final Answer; floats rounded to 3 decimals here):")
+        t.code(_display(json.loads(raw)), "json")
+    t.para("Composer output — `result.pydantic` (`CrewResponse`):")
+    t.code(_display(run.response.model_dump(mode="json")), "json")
+    t.para(f"**Answer:** {run.response.answer}")
+
+
+def crew_rag_query(t: Transcript) -> None:
+    deps = _crew_deps(t.settings)
+    run = CrewRun(deps, CREW_POLICY_QUERY, "transcript-08-policy")
+    rag = json.loads(run.outputs[0])["rag"]
+    t.section("Inputs")
+    t.para(
+        "A policy question through the full crew (§ARCH 7.9): Retrieval → Lookup → Composer, "
+        "sequential, one `MockCrewLLM` per agent bound to this request's `RequestContext`. The "
+        f"deployed collection is `{rag['strategy']}` with threshold {rag['threshold']} "
+        "(`config/retrieval.json`). The question carries no record id, so the Lookup agent "
+        "answers `no_record_id` without calling its tool."
+    )
+    _crew_wiring(t, run)
+    _crew_run_report(t, run, "Run")
+    calls = run.ctx.budget.calls()
+    t.check("only the Retrieval agent called a tool, and it was `rag_lookup` once",
+            run.tools == [("retrieval_agent", "rag_lookup")])  # fmt: skip
+    t.check("`check_loan_application_status` was not called",
+            all(tool != "check_loan_application_status" for _, tool in run.tools))  # fmt: skip
+    t.check(f"exact LLM calls: retrieval 2, lookup 1, composer 1 (got {calls})",
+            calls == {"composer": 1, "lookup": 1, "retrieval": 2})  # fmt: skip
+    t.check(
+        "`result.raw` validates as `CrewResponse` and equals `result.pydantic`",
+        CrewResponse.model_validate_json(run.result.raw) == run.result.pydantic == run.response,
+    )
+    t.check(
+        f"grounded policy answer sourced from `kb-08-prepayment-penalty` "
+        f"(intent={run.response.intent}, grounded={run.response.grounded})",
+        run.response.intent == "policy" and run.response.grounded
+        and run.response.sources[0].doc_id == "kb-08-prepayment-penalty",
+    )  # fmt: skip
+    t.check("every agent has `cache=False` and `allow_delegation=False` (P4)",
+            all(a.cache is False and a.allow_delegation is False
+                for a in run.agents))  # fmt: skip
+    t.check("no task output contains `Observation:` or the post-tool nudge (P1, P3)", run.clean())
+    t.check("the budget was not exceeded", not run.ctx.budget.exceeded)
+
+
+def crew_lookup_query(t: Transcript) -> None:
+    deps = _crew_deps(t.settings)
+    runs = [
+        CrewRun(deps, CREW_STATUS_QUERY, "transcript-09-status"),
+        CrewRun(deps, CREW_MIXED_QUERY, "transcript-09-mixed"),
+        CrewRun(deps, CREW_UNKNOWN_QUERY, "transcript-09-unknown"),
+    ]
+    status, mixed, unknown = runs
+    record = next(r for r in dataset.LOAN_APPLICATIONS if r["record_id"] == "LA-0007")
+    t.section("Inputs")
+    t.para(
+        "Three requests on fresh crews: a status question, a mixed status + policy question, "
+        "and a well-formed but unknown id. Only the Lookup agent holds "
+        "`check_loan_application_status` (`TOOL_ACL`, checked when each agent is built and "
+        "again by `audit_crew`). The record id is read from the masked query and handed to the "
+        "Lookup task between `<<<RECORD_ID>>>` delimiters; the mock dispatches the tool's "
+        "`args_schema` fields from it, never the tool name."
+    )
+    _crew_wiring(t, status)
+    for run, heading in zip(runs, ("Run 1 — status", "Run 2 — mixed", "Run 3 — unknown id"),
+                            strict=True):  # fmt: skip
+        _crew_run_report(t, run, heading)
+    t.section("Summary")
+    t.table(
+        ["run", "intent", "tools (agent → tool)", "LLM calls", "tokens"],
+        [[run.ctx.trace_id, run.response.intent,
+          "<br>".join(f"{a} → `{tool}`" for a, tool in run.tools),
+          f"`{json.dumps(run.ctx.budget.calls())}`", run.ctx.budget.used_tokens]
+         for run in runs],
+    )  # fmt: skip
+    t.check(
+        "status: only the Lookup agent called `check_loan_application_status`, with LA-0007",
+        [(e.agent, e.tool, e.args) for e in status.ctx.ledger.entries()]
+        == [("lookup_agent", "check_loan_application_status", {"record_id": "LA-0007"})],
+    )
+    t.check(
+        "status: the application view equals dataset record LA-0007",
+        status.response.application is not None
+        and status.response.application.model_dump()
+        == {k: record[k] for k in status.response.application.model_dump()},
+    )
+    t.check("mixed: both tools were invoked, each by its owner",
+            sorted(mixed.tools) == [("lookup_agent", "check_loan_application_status"),
+                                    ("retrieval_agent", "rag_lookup")])  # fmt: skip
+    t.check(f"mixed: grounded (sources: {[s.doc_id for s in mixed.response.sources]})",
+            mixed.response.intent == "mixed" and mixed.response.grounded)  # fmt: skip
+    t.check("unknown id: a polite not-found, not a refusal or an error",
+            unknown.response.intent == "clarify" and not unknown.response.refused
+            and unknown.response.answer.startswith(
+                "I couldn't find a loan application"))  # fmt: skip
+    expected = [
+        {"composer": 1, "lookup": 2, "retrieval": 1},
+        {"composer": 1, "lookup": 2, "retrieval": 2},
+        {"composer": 1, "lookup": 2, "retrieval": 1},
+    ]
+    t.check(
+        "exact LLM calls: status 1/2/1, mixed 2/2/1, unknown 1/2/1 (retrieval/lookup/composer)",
+        [run.ctx.budget.calls() for run in runs] == expected,
+    )
+    t.check("no non-owner holds the lookup tool in any crew",
+            all([a.role for a in run.agents
+                 if any(x.name == "check_loan_application_status" for x in a.tools)]
+                == ["Loan Application Lookup Specialist"] for run in runs))  # fmt: skip
+    t.check("every `result.raw` validates and equals `result.pydantic`",
+            all(CrewResponse.model_validate_json(run.result.raw) == run.result.pydantic
+                for run in runs))  # fmt: skip
+    t.check(
+        "no task output contains `Observation:` or the post-tool nudge",
+        all(r.clean() for r in runs),
+    )
+
+
+def _rejects_extra(response: CrewResponse) -> bool:
+    try:
+        CrewResponse.model_validate(response.model_dump(mode="json") | {"note": "hi"})
+    except ValidationError as exc:
+        return [e["type"] for e in exc.errors()] == ["extra_forbidden"]
+    return False
+
+
+def structured_output(t: Transcript) -> None:
+    deps = _crew_deps(t.settings)
+    t.section("Schema")
+    t.para(
+        "`CrewResponse` (`credagent/schemas.py`, §ARCH 7.11) is the Composer task's "
+        '`output_pydantic`. Every model is `extra="forbid"`, frozen, and strips whitespace. '
+        "Cross-field rules (`model_validator`):"
+    )
+    t.raw(
+        '- `refusal_reason` is set exactly when `refused` is true, and `intent == "refused"` '
+        "exactly then too; a refusal is never `grounded`.\n"
+        '- `intent == "status"` requires `application`; an `escalation` requires '
+        "`application`.\n"
+        "- `grounded` requires `sources`, unless the intent is `status` or `clarify` (those are "
+        "grounded in the application record or the request itself)."
+    )
+    t.table(
+        ["field", "type"],
+        [[f"`{name}`", f"`{_type_name(field.annotation)}`".replace("|", "\\|")]
+         for name, field in CrewResponse.model_fields.items()],
+    )  # fmt: skip
+    t.para(
+        "The orchestrator (§ARCH 6 step 6) runs `parse_crew_output`: `result.raw` must pass "
+        "`CrewResponse.model_validate_json` and equal `result.pydantic`, otherwise "
+        "`SchemaViolation`."
+    )
+
+    t.section("Every crew response validates")
+    cases = [
+        ("policy", CREW_POLICY_QUERY, None),
+        ("status", CREW_STATUS_QUERY, None),
+        ("mixed", CREW_MIXED_QUERY, None),
+        ("unknown id", CREW_UNKNOWN_QUERY, None),
+        ("out of scope", DEMO_OUT_OF_SCOPE, None),
+        ("clarify", CREW_CLARIFY_QUERY, None),
+        ("budget overrun (max_tokens=50)", CREW_POLICY_QUERY, 50),
+    ]
+    runs = [CrewRun(deps, q, f"transcript-12-{i}", max_tokens=m)
+            for i, (_, q, m) in enumerate(cases, start=1)]  # fmt: skip
+    t.table(
+        ["case", "query", "intent", "grounded", "refused", "refusal_reason", "sources",
+         "raw validates", "raw == pydantic"],
+        [[label, run.query, run.response.intent, run.response.grounded, run.response.refused,
+          run.response.refusal_reason or "—", len(run.response.sources),
+          _yes(CrewResponse.model_validate_json(run.result.raw) == run.response),
+          _yes(run.result.pydantic == run.response)]
+         for (label, *_), run in zip(cases, runs, strict=True)],
+    )  # fmt: skip
+    budget = runs[-1]
+    t.para("The budget-overrun response (P18: the mock never raises; it returns this refusal):")
+    t.code(budget.response.model_dump_json(indent=2), "json")
+
+    t.section("A malformed response is rejected")
+    malformed = runs[1].response.model_dump(mode="json") | {"application": None, "escalation": None}
+    malformed_raw = json.dumps(malformed, ensure_ascii=False)
+    t.para(
+        "The status response from above with its `application` (and `escalation`) removed, as a "
+        "broken Composer could emit it. Every field is well-typed; the cross-field rule rejects it:"
+    )
+    t.code(json.dumps(malformed, indent=2, ensure_ascii=False), "json")
+    errors: list[dict[str, Any]] = []
+    try:
+        CrewResponse.model_validate_json(malformed_raw)
+    except ValidationError as exc:
+        errors = [dict(e) for e in exc.errors(include_input=False, include_url=False)]
+    t.table(
+        ["loc", "type", "msg"],
+        [[".".join(map(str, e["loc"])) or "(model)", e["type"], e["msg"]] for e in errors],
+    )
+    rejected_by_parser = False
+    try:
+        parse_crew_output(SimpleNamespace(raw=malformed_raw, pydantic=None))
+    except SchemaViolation as exc:
+        rejected_by_parser = True
+        t.para(f"`parse_crew_output` raises `SchemaViolation`: {exc}")
+    t.check(f"all {len(runs)} crew responses validate and equal `result.pydantic`",
+            all(CrewResponse.model_validate_json(r.result.raw) == r.result.pydantic == r.response
+                for r in runs))  # fmt: skip
+    t.check("the intents cover policy, status, mixed, clarify, out_of_scope and refused",
+            {r.response.intent for r in runs}
+            == {"policy", "status", "mixed", "clarify", "out_of_scope", "refused"})  # fmt: skip
+    t.check("the budget overrun is a schema-valid `budget_exceeded` refusal and the flag is set",
+            budget.response.refusal_reason == "budget_exceeded"
+            and budget.ctx.budget.exceeded)  # fmt: skip
+    t.check(
+        "the malformed response is rejected: intent 'status' requires an application",
+        [e["type"] for e in errors] == ["value_error"]
+        and "intent 'status' requires an application" in errors[0]["msg"],
+    )
+    t.check("extra fields are forbidden too", _rejects_extra(runs[0].response))
+    t.check("`parse_crew_output` turns it into a `SchemaViolation`", rejected_by_parser)
+
+
 GENERATORS: dict[str, tuple[str, Generator]] = {
     "01_dataset_report": ("Dataset report (Task 1)", dataset_report),
     "02_kb_inventory": ("Knowledge-base inventory (Task 2)", kb_inventory),
@@ -961,6 +1308,12 @@ GENERATORS: dict[str, tuple[str, Generator]] = {
                                      chunking_precision_recall),
     "07_lookup_and_escalation": ("Loan lookup tool and escalation threshold (Task 6)",
                                  lookup_and_escalation),
+    "08_crew_rag_query": ("Crew: a policy question, only the Retrieval agent uses a tool (Task 7)",
+                          crew_rag_query),
+    "09_crew_lookup_query": ("Crew: status, mixed and unknown-id questions — ledger and LLM calls "
+                             "(Task 7)", crew_lookup_query),
+    "12_structured_output": ("Structured output: every crew response validates (Task 9)",
+                             structured_output),
 }  # fmt: skip
 
 
