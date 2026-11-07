@@ -699,3 +699,68 @@ nearer phrase is plural and a determiner rule would break turn 2, so that form k
 behaviour. Known limit: in a follow-up like "Is the rate fixed for its whole tenure?", "its" is
 read as "the rate's" and not resolved from history. Measured effect: P/R query 3 now runs the
 crew (6 calls, 4,057 tokens); the budget constants are unchanged (D-041).
+
+### D-043 `/v1/documents`: a live in-process `kb_version`; `kb_meta` stays the indexer's (§ARCH 7.15, 7.16, P13)
+`KbVersion` (kb/version.py) starts at `config/retrieval.json`'s `kb_version` and each add
+advances it: `sha256(f"{current}|{doc_id}|{sha256(body)}")`. `RagTool` reads it per request
+(`CrewDeps.kb`), so every cache key changes, and the cache is also `clear()`ed (P13, both
+mechanisms). It lives in-process like the cache it invalidates; `kb_meta` is not rewritten.
+Documents added at runtime are not in `kb/`: the next indexer run deletes them as stale (the KB in
+git stays the source of truth). Readiness (`check_index`) therefore checks that `kb_meta`'s
+version equals the retrieval config's and both collections are non-empty, not exact counts.
+Per-document indexing moved to `rag/indexing.py` (`index_document`, `chunk_metadata`), shared with
+`scripts/indexer.py`; chunking takes a `ChunkSource` protocol (doc_id, body). The text is masked,
+then cleaned, then split; 2–5 sentences; an overwrite replaces the old chunks (no orphans). 201 on
+success. Duplicates are found by `doc_id` metadata in either collection.
+
+### D-044 The request log line (§ARCH 7.17)
+* **One `event="request"` line per HTTP request** (every path, including `/healthz`, 404s and
+  rejected bodies) **and per WS client frame** (ask, reset or invalid). A reset or a malformed frame
+  is a request the server answered, so it is counted; the session frame is not.
+* Written **before** the final body chunk (HTTP) or the reply frame (WS) is sent, so a client that
+  has its answer can already read its line; a `finally` writes it when no response was sent.
+* `outcome` from the error code (`OUTCOME_BY_CODE`), else the pipeline record's, else
+  `answered`. `status_code` on WS is the HTTP equivalent. `path` is the route template (no ids).
+* Fields beyond §7.17: `truncated`, `history_length` (session messages after the turn: the
+  concurrency test reads it), `llm_usage` = `[[prompt, completion], …]` (numbers only).
+* Trace and session ids the server makes are UUID4s the PII masker leaves unchanged (a 4-4-4 digit
+  run reads as an Aadhaar and the scrub filter would rewrite the id). An inbound `X-Trace-Id` is
+  accepted only if it matches the pattern **and** is unchanged by the masker. A `session_id` the
+  masker would change (a PAN fits the id pattern) is a 422: it would be a memory key.
+* `PiiScrubFilter` gets the masker injected (`observability` stays a leaf, D-024).
+
+### D-045 API startup, readiness and auth (§ARCH 3.5, 7.16, 8)
+* The embedder loads in the lifespan (fail fast); `build_services` runs in the background and is
+  retried (`CHROMA_BACKOFF_CAP_S`) until Chroma and the index are ready. Until then `/readyz` and
+  every endpoint answer 503 (`NOT_READY`), WS closes 1013. `api`/`api-offline` get a compose
+  healthcheck on `/readyz`, so `up --wait` returns once the API is ready (the image HEALTHCHECK
+  stays on `/healthz`).
+* P14: `assert_single_worker()` refuses to start when `multiprocessing.parent_process()` exists
+  (uvicorn `--workers N>1` serves from child processes); settings already reject
+  `WEB_CONCURRENCY ≠ 1`. `credagent.api.app:app` is created on first attribute access, so importing
+  the module configures nothing.
+* The admin key also opens the user endpoints; the user key on `/v1/documents` is 403. WS with a
+  bad key is closed with 1008 before accept, which the client sees as an HTTP 403 handshake reply.
+* `Services` (pipeline/factory.py) bundles what the API holds; `build_orchestrator` is its
+  orchestrator with a `NullSink` (scripts keep their own records). The API's stage 12 is a
+  `RecordCollector` that the middleware / WS loop drains by trace id.
+* `Orchestrator(metrics=…)` counts `llm_calls{persona}` for `/v1/stats`; `AskResponse.timings_ms`
+  now includes `rag` (the cache demo reads it from the response).
+
+### D-046 API transcripts, test data in Chroma, and the pii-scan (§ARCH 7.19, 11.6)
+* Transcripts 16, 17, 18, 24 start the real app (`create_app` + `build_services`) in uvicorn on
+  127.0.0.1 inside the generating container: real HTTP/WS sockets on the backend-only network,
+  self-contained for `make transcripts`, the golden test and the offline proof. Transcript 17 stops
+  the server gracefully before reading the log: uvicorn waits for every connection task, so A's
+  mid-turn outcome is logged first.
+* Transcript 16, the e2e and the security tests add documents to the shared collections; each
+  deletes them again (transcript in-process, tests straight in Chroma).
+* E2E scenario 6 waits for A's `ws_disconnect_mid_turn` with a bounded poll of the log
+  (`wait_for_log`, 60 s): it is written after A's pipeline finishes, when A is gone, so no response
+  can signal it. Nothing else in the suite polls.
+* `make pii-scan` (and gate step 6) = `ci/pii_scan.sh`: the security layer against `api-offline`
+  (canaries through `/v1/ask`, WS, `/v1/documents`, a validation error and an injection block; scans
+  of the log volume, both collections, `transcripts/`, and in-process session histories and cache
+  keys), then a host-side scan of `docker compose logs`.
+* The concurrency test is the user-scoped one: 20 HTTP asks over 10 sessions (§ARCH 8's extra three
+  WS clients are covered by scenario 6's concurrent WS clients).
