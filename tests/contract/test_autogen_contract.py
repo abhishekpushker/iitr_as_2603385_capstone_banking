@@ -181,3 +181,20 @@ def test_missing_custom_message_types_fails_the_run() -> None:
     not_registered = r"ValueError: Message type .*StructuredMessage\[Verdict\].* is not registered"
     with pytest.raises(RuntimeError, match=not_registered):
         asyncio.run(team.run(task="t"))
+
+
+def test_our_review_team_has_both_agents_speak_and_the_brief_verdict_fields() -> None:
+    """P12 on the production team (`build_review_team`): three messages, the editor's typed."""
+    from credagent.context import RequestContext
+    from credagent.review.team import build_review_team, render_task
+    from credagent.schemas import ReviewVerdict
+
+    draft = "Floating-rate home loans carry no prepayment penalty."
+    team = build_review_team(RequestContext.new(session_id="s", max_tokens=8000))
+    result = asyncio.run(team.run(task=render_task("q?", draft, [draft])))
+    assert [(type(m), m.source) for m in result.messages] == [
+        (TextMessage, "user"),
+        (TextMessage, "Policy_Compliance_Reviewer"),
+        (StructuredMessage[ReviewVerdict], "Final_Editor"),
+    ]
+    assert set(ReviewVerdict.model_fields) == {"approved", "final_answer", "reason"}

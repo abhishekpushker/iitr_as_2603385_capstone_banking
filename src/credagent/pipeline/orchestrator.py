@@ -12,7 +12,9 @@ from the API (Phase 10) to the agent. Every stage records its duration in `ctx.t
  5  crew        crew_runner(ctx, query) in a worker thread under fail_after(REQUEST_TIMEOUT_S)
                 → PipelineTimeout; afterwards meter.exceeded → BudgetExceeded("runtime")
  6  schema      parse_crew_output (raw validates, equals pydantic) + the two task outputs
- 7  review      ReviewStage.review(ctx, draft, trace) → ReviewVerdict (pass-through until Phase 8)
+ 7  review      ReviewStage.review(ctx, query, draft, trace, lookup) → ReviewOutcome: the Autogen
+                team (`AutogenReview`); skipped for refusals and clarifications, which claim
+                nothing. A failed review fails closed: agent_error refusal, `review_error` logged
  8  groundedness GroundednessGuard.check(verdict.final_answer, draft, trace, lookup)
  9  budget_postcheck  meter.exceeded (e.g. review overran) → BudgetExceeded("runtime")
 10  append      the Runnable stores HumanMessage(masked) + AIMessage(answer, {record_id,
@@ -21,11 +23,11 @@ from the API (Phase 10) to the agent. Every stage records its duration in `ctx.t
 12  log         RequestSink.emit(TurnRecord) in `finally`, exactly once, masked fields only
 ```
 
-Stage 3's real policy (`governance.budget.BudgetPolicy`) and stage 7's Autogen team arrive in
-Phases 9 and 8 behind `BudgetPreflight` and `ReviewStage`; stage 12's JSON-lines logger arrives in
-Phase 10 behind `RequestSink`. Errors propagate as typed exceptions (`PipelineTimeout`,
-`BudgetExceeded`, `SchemaViolation`) for the API to map to 504 / 413 / 500, after the record
-is emitted with its outcome and error code.
+Stage 3's real policy (`governance.budget.BudgetPolicy`) arrives in Phase 9 behind
+`BudgetPreflight`; stage 12's JSON-lines logger arrives in Phase 10 behind `RequestSink`.
+Errors propagate as typed exceptions (`PipelineTimeout`, `BudgetExceeded`, `SchemaViolation`)
+for the API to map to 504 / 413 / 500, after the record is emitted with its outcome and error
+code.
 """
 
 from __future__ import annotations
@@ -35,7 +37,7 @@ import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Final, Literal, Protocol
+from typing import Any, Literal, Protocol
 
 import anyio
 import anyio.to_thread
@@ -54,6 +56,7 @@ from credagent.guardrails.injection import InjectionDetector
 from credagent.guardrails.pii import PiiMasker, PiiType
 from credagent.llm.engine import CLARIFY_ANSWER, MockEngine
 from credagent.memory.session import ConversationMemory
+from credagent.review.team import ReviewContext, ReviewOutcome, run_review
 from credagent.schemas import (
     LOOKUP_TASK_OUTPUT,
     AskResponse,
@@ -74,10 +77,6 @@ Outcome = Literal[
 ]
 CrewRunner = Callable[[RequestContext, str], Any]  # → a CrewOutput-shaped object
 ChunkTexts = Callable[[Sequence[str]], Mapping[str, str]]  # chunk ids → texts
-
-REVIEW_STUB_REASON: Final = (
-    "Review stage not enabled yet (Phase 8): the draft is passed through unchanged."
-)
 
 
 # ------------------------------------------------------------------ errors
@@ -128,17 +127,41 @@ class PassThroughPreflight:
 
 class ReviewStage(Protocol):
     async def review(
-        self, ctx: RequestContext, draft: CrewResponse, trace: RetrievalTrace | None
-    ) -> ReviewVerdict: ...
+        self,
+        ctx: RequestContext,
+        query: str,
+        draft: CrewResponse,
+        trace: RetrievalTrace | None,
+        lookup: LookupFound | LookupNotFound | None,
+    ) -> ReviewOutcome: ...
 
 
-class PassThroughReview:
-    """Stage 7 until Phase 8: approves the draft unchanged."""
+class AutogenReview:
+    """Stage 7 (§ARCH 7.13): the reviewer/editor team on the draft answer. The context is the
+    retrieved chunk texts and, when there is an application record, its JSON and the record's
+    canonical statement (D-038)."""
+
+    def __init__(self, engine: MockEngine | None = None) -> None:
+        self._engine = MockEngine() if engine is None else engine
+
+    def context_for(
+        self, query: str, trace: RetrievalTrace | None, lookup: LookupFound | LookupNotFound | None
+    ) -> ReviewContext:
+        documents = [] if trace is None else list(trace.contexts)
+        if isinstance(lookup, LookupFound):
+            documents += [lookup.model_dump_json(exclude={"kind"}),
+                          self._engine.record_statement(lookup)]  # fmt: skip
+        return ReviewContext(question=query, documents=tuple(documents))
 
     async def review(
-        self, ctx: RequestContext, draft: CrewResponse, trace: RetrievalTrace | None
-    ) -> ReviewVerdict:
-        return ReviewVerdict(approved=True, final_answer=draft.answer, reason=REVIEW_STUB_REASON)
+        self,
+        ctx: RequestContext,
+        query: str,
+        draft: CrewResponse,
+        trace: RetrievalTrace | None,
+        lookup: LookupFound | LookupNotFound | None,
+    ) -> ReviewOutcome:
+        return await run_review(draft.answer, self.context_for(query, trace, lookup), ctx)
 
 
 @dataclass
@@ -160,6 +183,7 @@ class TurnRecord:
     top1_similarity: float | None = None
     guard_checks: tuple[SentenceCheck, ...] = ()
     review_approved: bool | None = None
+    review_error: str | None = None  # the review failed closed (§ARCH 7.13)
     cache_hit: bool = False
     tools_invoked: tuple[ToolCall, ...] = ()
     tokens_estimated: int = 0
@@ -220,8 +244,8 @@ class Orchestrator:
         self._detector = InjectionDetector() if detector is None else detector
         self._max_tokens = s.budget_max_tokens if max_tokens is None else max_tokens
         self._preflight = PassThroughPreflight(self._max_tokens) if preflight is None else preflight
-        self._review = PassThroughReview() if review is None else review
         self._engine = MockEngine() if engine is None else engine
+        self._review = AutogenReview(self._engine) if review is None else review
         self._guard = GroundednessGuard(self._engine) if guard is None else guard
         self._sink = NullSink() if sink is None else sink
         self._timeout_s = s.request_timeout_s if timeout_s is None else timeout_s
@@ -328,21 +352,29 @@ class Orchestrator:
         record.draft_intent = draft.intent
         trace = await self._trace(retrieval)
 
-        with _stage(ctx, "review"):
-            verdict = await self._review.review(ctx, draft, trace)
-        record.review_approved = verdict.approved
+        verdict: ReviewVerdict | None = None
+        if not (draft.refused or draft.intent == "clarify"):  # those claim nothing to review
+            with _stage(ctx, "review"):
+                outcome = await self._review.review(ctx, follow.query, draft, trace, lookup)
+            verdict = outcome.verdict
+            record.review_approved, record.review_error = verdict.approved, outcome.error
 
         found = lookup if isinstance(lookup, LookupFound) else None
-        with _stage(ctx, "groundedness"):
-            decision = self._guard.check(verdict.final_answer, draft, trace, found)
-        record.guard_reason = decision.reason
-        record.top1_similarity = decision.top1_similarity
-        record.guard_checks = decision.checks
+        decision: GuardDecision | None = None
+        if record.review_error is not None:
+            final = self._engine.refusal("agent_error")  # fail closed (§ARCH 7.13)
+        else:
+            with _stage(ctx, "groundedness"):
+                answer = draft.answer if verdict is None else verdict.final_answer
+                decision = self._guard.check(answer, draft, trace, found)
+            record.guard_reason = decision.reason
+            record.top1_similarity = decision.top1_similarity
+            record.guard_checks = decision.checks
+            final = decision.response
 
         with _stage(ctx, "budget_postcheck"):
             self._budget_check(ctx)
 
-        final = decision.response
         record.intent = final.intent
         holder.append(_TurnResult(final, verdict, decision))
         return AIMessage(

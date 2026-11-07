@@ -28,14 +28,15 @@ from credagent.guardrails.pii import MaskResult, PiiMasker
 from credagent.llm.engine import CLARIFY_ANSWER, REFUSAL_ANSWERS, FollowUp, MockEngine
 from credagent.memory.session import ConversationMemory, SessionStore
 from credagent.pipeline.orchestrator import (
+    AutogenReview,
     BudgetExceeded,
     Orchestrator,
     PassThroughPreflight,
-    PassThroughReview,
     PipelineTimeout,
     PreflightResult,
     TurnRecord,
 )
+from credagent.review.team import ReviewOutcome
 from credagent.schemas import (
     LOOKUP_TASK_OUTPUT,
     CrewResponse,
@@ -190,12 +191,13 @@ def spies(spy: Spy) -> dict[str, Any]:
             spy.saw("memory", query, list(history))
             return super().resolve_followup(query, history)
 
-    class SpyReview(PassThroughReview):
+    class SpyReview(AutogenReview):
         async def review(
-            self, ctx: RequestContext, draft: CrewResponse, trace: RetrievalTrace | None
-        ) -> ReviewVerdict:
-            spy.saw("review", ctx, draft, trace)
-            return await super().review(ctx, draft, trace)
+            self, ctx: RequestContext, query: str, draft: CrewResponse,
+            trace: RetrievalTrace | None, lookup: Any,
+        ) -> ReviewOutcome:  # fmt: skip
+            spy.saw("review", ctx, query, draft, trace, lookup)
+            return await super().review(ctx, query, draft, trace, lookup)
 
     class SpyGuard(GroundednessGuard):
         def check(self, final_answer: str, response: CrewResponse, trace: Any, lookup: Any) -> Any:
@@ -304,9 +306,11 @@ async def test_a_redaction_token_does_not_turn_a_status_question_into_a_mixed_on
 
 @pytest.mark.anyio
 async def test_review_verdict_final_answer_is_what_the_gate_judges_and_sends() -> None:
-    class Trim(PassThroughReview):
-        async def review(self, ctx: Any, draft: CrewResponse, trace: Any) -> ReviewVerdict:
-            return ReviewVerdict(approved=False, final_answer=KB08, reason="trimmed")
+    class Trim:
+        async def review(self, ctx: Any, query: str, draft: CrewResponse, trace: Any,
+                         lookup: Any) -> ReviewOutcome:  # fmt: skip
+            verdict = ReviewVerdict(approved=False, final_answer=KB08, reason="trimmed")
+            return ReviewOutcome(verdict, draft.answer, (), error=None)
 
     orch, *_ = make(review=Trim())
     r = await orch.handle("Is there a prepayment penalty on a home loan?", "s1")
@@ -453,12 +457,12 @@ async def test_runtime_budget_overrun_raises_after_kickoff_and_stores_nothing() 
 
 @pytest.mark.anyio
 async def test_budget_overrun_during_review_is_caught_by_the_postcheck() -> None:
-    class Expensive(PassThroughReview):
+    class Expensive(AutogenReview):
         async def review(
-            self, ctx: RequestContext, draft: CrewResponse, trace: Any
-        ) -> ReviewVerdict:
+            self, ctx: RequestContext, query: str, draft: CrewResponse, trace: Any, lookup: Any
+        ) -> ReviewOutcome:
             ctx.budget.charge("reviewer", 10**6)
-            return await super().review(ctx, draft, trace)
+            return await super().review(ctx, query, draft, trace, lookup)
 
     orch, _, _, store = make(review=Expensive())
     with pytest.raises(BudgetExceeded) as info:
@@ -510,10 +514,3 @@ async def test_an_unexpected_error_is_logged_as_internal_and_re_raised() -> None
 def test_pass_through_preflight_estimates_tokens_and_never_rejects() -> None:
     result = PassThroughPreflight(budget_tokens=8000).preflight("x" * 40_000)
     assert result == PreflightResult(exceeds=False, projected_tokens=10_000, budget_tokens=8000)
-
-
-@pytest.mark.anyio
-async def test_pass_through_review_approves_the_draft_unchanged() -> None:
-    draft = ENGINE.refusal("agent_error")
-    verdict = await PassThroughReview().review(RequestContext.new(session_id="s"), draft, None)
-    assert verdict.approved and verdict.final_answer == draft.answer

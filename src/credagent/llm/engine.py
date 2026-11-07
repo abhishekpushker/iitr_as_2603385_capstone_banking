@@ -34,6 +34,16 @@ Phase 7 (memory, §ARCH 7.10):
   the loan category ("eligibility criteria for it" → "… for a Home loan"). Nothing to resolve →
   `clarify`. No side state: a fresh session has an empty history and so no state.
 
+Phase 8 (the Autogen review, §ARCH 7.8.2):
+
+* `review(draft, context)`: the Policy_Compliance_Reviewer's report: one line per draft sentence
+  (the support rule above against the context) and, last, `REVIEW_JSON: {"unsupported": [...],
+  "supported_count": n, "total": m}`.
+* `edit(review_json, draft)`: the Final_Editor's `ReviewVerdict`. Nothing unsupported →
+  approved, `final_answer` is the draft byte for byte. Otherwise the unsupported sentences are
+  removed (the rest keep their order and text); nothing left → `FALLBACK_ANSWER`. A report that
+  does not describe this draft (other sentences, another count) raises `ValueError`.
+
 Nothing here knows any query: behaviour comes only from the query tokens and the chunks (N7).
 """
 
@@ -45,7 +55,7 @@ from dataclasses import dataclass
 from typing import Final, get_args
 
 from langchain_core.messages import AIMessage, BaseMessage
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from credagent.rag.retriever import NO_MATCH_SIMILARITY
 from credagent.rag.store import RetrievedChunk
@@ -64,6 +74,7 @@ from credagent.schemas import (
     RagToolError,
     RefusalReason,
     RetrievalTaskOutput,
+    ReviewVerdict,
     SourceRef,
 )
 from credagent.text import (
@@ -307,6 +318,49 @@ class MockEngine:
             if not any(cand.key != other and cand.key in other for other in keys)
         ]
 
+    # ------------------------------------------------------------------ review (Phase 8)
+    def review(self, draft: str, context: Sequence[str]) -> str:
+        report = self.support_report(draft, context)
+        lines = [
+            f"Policy compliance review: {report.supported_count} of {report.total} sentences are "
+            "supported by the retrieved context."
+        ]
+        for i, s in enumerate(report.sentences, start=1):
+            detail = f"token recall {s.recall:.2f}"
+            if s.numbers_missing:
+                detail += "; numbers not in the context: " + ", ".join(s.numbers_missing)
+            lines.append(f'{i}. {"supported" if s.supported else "UNSUPPORTED"} ({detail}): '
+                         f'"{s.sentence}"')  # fmt: skip
+        findings = ReviewFindings(
+            unsupported=tuple(s.sentence for s in report.sentences if not s.supported),
+            supported_count=report.supported_count, total=report.total,
+        )  # fmt: skip
+        lines.append(REVIEW_JSON_PREFIX + findings.model_dump_json())
+        return "\n".join(lines)
+
+    def edit(self, review_json: str, draft: str) -> ReviewVerdict:
+        findings = ReviewFindings.model_validate_json(review_json)
+        sentences = [s for _, s in _split(draft)]
+        unsupported = set(findings.unsupported)
+        if len(sentences) != findings.total or not unsupported <= set(sentences):
+            raise ValueError("the review does not describe this draft")
+        if not unsupported:
+            return ReviewVerdict(
+                approved=True, final_answer=draft,
+                reason=f"All {findings.total} sentences are supported by the retrieved context.",
+            )  # fmt: skip
+        kept = [s for s in sentences if s not in unsupported]
+        removed = "; ".join(f'"{s}"' for s in findings.unsupported)
+        reason = (
+            f"Removed {len(sentences) - len(kept)} of {findings.total} sentences not supported by "
+            f"the retrieved context: {removed}"
+        )
+        if not kept:
+            reason += " Nothing supported remained, so the safe fallback is sent."
+        return ReviewVerdict(
+            approved=False, final_answer=" ".join(kept) if kept else FALLBACK_ANSWER, reason=reason
+        )
+
     # ------------------------------------------------------------------ Composer (Phase 6)
     # ------------------------------------------------------------------ memory (Phase 7)
     def is_status_only(self, query: str) -> bool:
@@ -343,6 +397,10 @@ class MockEngine:
         if status_only and any(t in STATUS_CUES for t in tokens):
             return "clarify"
         return "policy"
+
+    def record_statement(self, app: LookupFound) -> str:
+        """The status answer's statement of the record (the reviewer's context for it, D-038)."""
+        return _status_sentence(app)
 
     def refusal(self, reason: RefusalReason) -> CrewResponse:
         return CrewResponse(
@@ -434,6 +492,20 @@ def _application(app: LookupFound) -> tuple[ApplicationView, Escalation]:
             recommended=app.escalation_recommended,
         ),
     )  # fmt: skip
+
+
+# ------------------------------------------------------------------ review (Phase 8)
+REVIEW_JSON_PREFIX: Final = "REVIEW_JSON: "
+
+
+class ReviewFindings(BaseModel):
+    """The reviewer's machine-readable last line (§ARCH 7.8.2)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    unsupported: tuple[str, ...]
+    supported_count: int = Field(ge=0)
+    total: int = Field(ge=0)
 
 
 # ------------------------------------------------------------------ follow-up resolution (Phase 7)

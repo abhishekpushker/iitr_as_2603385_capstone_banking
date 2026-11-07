@@ -47,17 +47,20 @@ from credagent.guardrails.pii import TOKENS, PiiMasker
 from credagent.kb.chunking import FIXED_PARAMS, STRATEGIES, Chunk, chunk_document, chunk_params
 from credagent.kb.loader import DISCLAIMER, KbDocument, load_kb
 from credagent.kb.version import kb_version
+from credagent.llm.autogen_client import EDITOR_NAME, REVIEWER_NAME
 from credagent.llm.engine import CLARIFY_ANSWER, REFUSAL_ANSWERS, MockEngine, format_inr
 from credagent.memory.session import SessionStore
 from credagent.observability.metrics import Metrics
 from credagent.pipeline.factory import build_orchestrator
-from credagent.pipeline.orchestrator import ReviewStage, TurnRecord
+from credagent.pipeline.orchestrator import AutogenReview, ReviewStage, TurnRecord
 from credagent.rag import calibration as cal
 from credagent.rag import evaluation as ev
 from credagent.rag.embedder import get_embedder
 from credagent.rag.generator import GroundedGenerator
 from credagent.rag.retriever import Retriever, collections_from_settings
 from credagent.rag.store import VectorStore, connect_http
+from credagent.review.team import MAX_TURNS as REVIEW_MAX_TURNS
+from credagent.review.team import ReviewOutcome, run_review
 from credagent.schemas import (
     FALLBACK_ANSWER,
     LOAN_STATUS_OUTPUT,
@@ -1401,7 +1404,7 @@ def memory_multiturn(t: Transcript) -> None:
     t.section("Inputs")
     t.para(
         f"Three turns in one session (`{session}`) through `Orchestrator.handle` (§ARCH 6): the "
-        "real masker, injection check, memory, crew, pass-through review and groundedness gate. "
+        "real masker, injection check, memory, crew, Autogen review and groundedness gate. "
         "Turns 2 and 3 name no application or loan type; `MockEngine.resolve_followup` rewrites "
         "them from the history's AI messages only."
     )
@@ -1715,29 +1718,32 @@ def guardrail_injection(t: Transcript) -> None:
 
 
 class ClaimAddingReview:
-    """Test double for stage 7 (Phase 8 brings the Autogen review): approves the draft but
-    appends one sentence, standing in for a reviewer/editor that introduced a claim."""
+    """Test double for stage 7: approves the draft but appends one sentence, standing in for a
+    faulty reviewer/editor that introduced a claim (the real review removes one, transcript 21)."""
 
     def __init__(self, claim: str) -> None:
         self.claim = claim
 
-    async def review(self, ctx: RequestContext, draft: CrewResponse,
-                     trace: RetrievalTrace | None) -> ReviewVerdict:  # fmt: skip
-        return ReviewVerdict(approved=True, final_answer=f"{draft.answer} {self.claim}",
-                             reason="test double: appended one sentence")  # fmt: skip
+    async def review(self, ctx: RequestContext, query: str, draft: CrewResponse,
+                     trace: RetrievalTrace | None, lookup: Any) -> ReviewOutcome:  # fmt: skip
+        answer = f"{draft.answer} {self.claim}"
+        verdict = ReviewVerdict(approved=True, final_answer=answer,
+                                reason="test double: appended one sentence")  # fmt: skip
+        return ReviewOutcome(verdict, draft.answer, (), error=None)
 
 
 class AmountChangingReview:
     """Test double for stage 7: rewrites the loan amount in the status sentence."""
 
-    async def review(self, ctx: RequestContext, draft: CrewResponse,
-                     trace: RetrievalTrace | None) -> ReviewVerdict:  # fmt: skip
+    async def review(self, ctx: RequestContext, query: str, draft: CrewResponse,
+                     trace: RetrievalTrace | None, lookup: Any) -> ReviewOutcome:  # fmt: skip
         if draft.application is None:
             raise TypeError("AmountChangingReview needs a status draft")
         right = format_inr(draft.application.loan_amount_inr)
         wrong = format_inr(draft.application.loan_amount_inr * 2)
-        return ReviewVerdict(approved=True, final_answer=draft.answer.replace(right, wrong),
-                             reason="test double: doubled the loan amount")  # fmt: skip
+        verdict = ReviewVerdict(approved=True, final_answer=draft.answer.replace(right, wrong),
+                                reason="test double: doubled the loan amount")  # fmt: skip
+        return ReviewOutcome(verdict, draft.answer, (), error=None)
 
 
 def _check_rows(record: TurnRecord) -> list[list[object]]:
@@ -1782,7 +1788,8 @@ def guardrail_groundedness(t: Transcript) -> None:
         if review is not None:
             t.para(
                 f"Stage 7 is a test double here (`{type(review).__name__}`), standing in for a "
-                "faulty reviewer; the real Autogen review arrives in Phase 8."
+                "faulty reviewer that let a bad sentence through (transcript 21 shows the real "
+                "Autogen review removing one)."
             )
         top1 = p.last.top1_similarity
         t.table(
@@ -1827,6 +1834,164 @@ def guardrail_groundedness(t: Transcript) -> None:
     )
 
 
+# ------------------------------------------------------------------ 20, 21: Autogen review
+REVIEW_CLAIM = "Cred also offers a 0% interest rate on all personal loans for life."  # §ARCH 7.13
+REVIEW_QUERIES = (
+    ("policy", CREW_POLICY_QUERY), ("status", CREW_STATUS_QUERY), ("mixed", CREW_MIXED_QUERY),
+)  # fmt: skip
+PERSONAS = ("retrieval", "lookup", "composer", "reviewer", "editor")
+
+
+class RecordingReview(AutogenReview):
+    """The production stage 7, keeping each outcome and the meter's per-persona counts. With
+    `inject_claim` it is transcript 21's test-only hook (§ARCH 7.13): the claim reaches the team
+    only through `run_review`'s own parameter."""
+
+    def __init__(self, inject_claim: str | None = None) -> None:
+        super().__init__()
+        self.inject_claim = inject_claim
+        self.outcomes: list[ReviewOutcome] = []
+        self.calls: list[dict[str, int]] = []
+        self.tokens: list[dict[str, int]] = []
+
+    async def review(
+        self, ctx: RequestContext, query: str, draft: CrewResponse,
+        trace: RetrievalTrace | None, lookup: Any,
+    ) -> ReviewOutcome:  # fmt: skip
+        context = self.context_for(query, trace, lookup)
+        outcome = await run_review(draft.answer, context, ctx, inject_claim=self.inject_claim)
+        self.outcomes.append(outcome)
+        self.calls.append(ctx.budget.calls())
+        self.tokens.append(ctx.budget.tokens_by_persona())
+        return outcome
+
+
+def _team_wiring(t: Transcript) -> None:
+    t.para(
+        f"Team (§ARCH 7.13): `RoundRobinGroupChat([{REVIEWER_NAME}, {EDITOR_NAME}], "
+        f"max_turns={REVIEW_MAX_TURNS}, custom_message_types=[StructuredMessage[ReviewVerdict]])`"
+        ", built fresh per request by `build_review_team(ctx)`. Each agent has its own "
+        "`MockAutogenClient` (`reviewer` / `editor`) charging the request's `BudgetMeter`; the "
+        "editor has `output_content_type=ReviewVerdict`. The reviewer reads only the `user` task, "
+        "the editor only the reviewer's message."
+    )
+
+
+def _review_messages(t: Transcript, outcome: ReviewOutcome) -> None:
+    for i, (source, kind, content) in enumerate(outcome.messages, start=1):
+        t.para(f"Message {i} — `{kind}` from `{source}`:")
+        t.code(content)
+    t.para("Verdict (`ReviewVerdict`, the editor's `StructuredMessage` content):")
+    t.code(outcome.verdict.model_dump_json(indent=2), "json")
+
+
+def _shape_ok(outcome: ReviewOutcome) -> bool:
+    return [(s, k) for s, k, _ in outcome.messages] == [
+        ("user", "TextMessage"), (REVIEWER_NAME, "TextMessage"),
+        (EDITOR_NAME, "StructuredMessage[ReviewVerdict]"),
+    ]  # fmt: skip
+
+
+def _usage_rows(t: Transcript) -> list[list[object]]:
+    rows: list[list[object]] = []
+    for kind, query in REVIEW_QUERIES:
+        review = RecordingReview()
+        r = Pipeline(t.settings, review=review).ask(query, f"t20-{kind}", f"transcript-20-{kind}")
+        calls, tokens = review.calls[-1], review.tokens[-1]
+        rows.append([
+            f"`{r.intent}`", *(calls.get(p, 0) for p in PERSONAS), sum(calls.values()),
+            tokens.get("reviewer", 0) + tokens.get("editor", 0), r.usage.estimated_tokens,
+            f"{r.usage.estimated_tokens / r.usage.budget_tokens:.0%}",
+        ])  # fmt: skip
+    return rows
+
+
+def review_approve(t: Transcript) -> None:
+    review = RecordingReview()
+    p = Pipeline(t.settings, review=review)
+    t.section("Inputs")
+    t.para(
+        f'A normal policy question, "{CREW_POLICY_QUERY}", through `Orchestrator.handle`: stage 7 '
+        "runs the Autogen review on the crew's draft, then the groundedness gate judges the "
+        "verdict's `final_answer`."
+    )
+    _team_wiring(t)
+    r = p.ask(CREW_POLICY_QUERY, "transcript-20", "transcript-20")
+    (outcome,) = review.outcomes
+    t.section("The review")
+    _review_messages(t, outcome)
+    t.para(f"**Answer sent:** {r.answer}")
+    t.section("LLM calls and tokens per query type (review included)")
+    t.para(f"Queries: {'; '.join(f'`{k}` = "{q}"' for k, q in REVIEW_QUERIES)}.")
+    t.table(["intent", *PERSONAS, "LLM calls", "review tokens", "total tokens", "of budget"],
+            _usage_rows(t))  # fmt: skip
+    last_line = outcome.messages[1][2].rsplit("\n", 1)[-1] if len(outcome.messages) > 1 else ""
+    t.check("the draft is approved", outcome.error is None and outcome.verdict.approved)
+    t.check(
+        "`final_answer == draft`, byte for byte",
+        outcome.verdict.final_answer.encode() == outcome.draft.encode(),
+    )
+    t.check(
+        "exactly three messages: the task, the reviewer, the editor's "
+        "`StructuredMessage[ReviewVerdict]` — both agents spoke (P12)",
+        _shape_ok(outcome),
+    )
+    t.check(
+        "the reviewer's last line is `REVIEW_JSON` with nothing unsupported",
+        last_line.startswith('REVIEW_JSON: {"unsupported":[]'),
+    )
+    t.check("the gate passed the approved answer and it was sent unchanged",
+            p.last.guard_reason == "passed" and r.answer == outcome.draft
+            and not r.refused)  # fmt: skip
+    t.check("`AskResponse.review` is the verdict", r.review == outcome.verdict)
+    t.check(
+        "one reviewer and one editor call were charged to the budget meter",
+        review.calls[-1].get("reviewer") == 1 and review.calls[-1].get("editor") == 1,
+    )
+
+
+def review_revise(t: Transcript) -> None:
+    review = RecordingReview(inject_claim=REVIEW_CLAIM)
+    p = Pipeline(t.settings, review=review)
+    t.section("Inputs")
+    t.para(
+        f'The same pipeline and question as transcript 20, "{CREW_POLICY_QUERY}", with the '
+        f'test-only hook `run_review(..., inject_claim="{REVIEW_CLAIM}")` appending a fabricated '
+        "claim to the draft. The hook is a parameter of `credagent.review.team.run_review` only; "
+        "no pipeline or API input model has such a field (unit test)."
+    )
+    _team_wiring(t)
+    r = p.ask(CREW_POLICY_QUERY, "transcript-21", "transcript-21")
+    (outcome,) = review.outcomes
+    original = outcome.draft.removesuffix(f" {REVIEW_CLAIM}")
+    reviewer_text = outcome.messages[1][2] if len(outcome.messages) > 1 else ""
+    t.section("The review")
+    _review_messages(t, outcome)
+    t.para(f"**Answer sent:** {r.answer}")
+    t.check(
+        "the reviewed draft is the crew's draft plus the injected claim",
+        outcome.draft == f"{original} {REVIEW_CLAIM}",
+    )
+    t.check("the verdict is `approved=false`",
+            outcome.error is None and not outcome.verdict.approved)  # fmt: skip
+    t.check("the reviewer flags exactly the claim (its 0% is not in the context)",
+            f'"unsupported":["{REVIEW_CLAIM}"]' in reviewer_text
+            and "numbers not in the context: 0%" in reviewer_text)  # fmt: skip
+    t.check(
+        "the claim is removed and the other sentences stay, in order (`final_answer` = the "
+        "crew's draft)",
+        outcome.verdict.final_answer == original,
+    )
+    t.check("the reason names the removed sentence", REVIEW_CLAIM in outcome.verdict.reason)
+    t.check(
+        "exactly three messages, the last the editor's `StructuredMessage[ReviewVerdict]`",
+        _shape_ok(outcome),
+    )
+    t.check("the gate passed the revised answer, which is what was sent",
+            p.last.guard_reason == "passed" and r.answer == original
+            and REVIEW_CLAIM not in r.answer)  # fmt: skip
+
+
 GENERATORS: dict[str, tuple[str, Generator]] = {
     "01_dataset_report": ("Dataset report (Task 1)", dataset_report),
     "02_kb_inventory": ("Knowledge-base inventory (Task 2)", kb_inventory),
@@ -1855,6 +2020,10 @@ GENERATORS: dict[str, tuple[str, Generator]] = {
                                guardrail_injection),
     "15_guardrail_groundedness": ("Guardrail: output groundedness gate (Task 10)",
                                   guardrail_groundedness),
+    "20_review_approve": ("Autogen review: a supported draft is approved unchanged (Task 14)",
+                          review_approve),
+    "21_review_revise": ("Autogen review: an injected claim is removed (Task 14)",
+                         review_revise),
 }  # fmt: skip
 
 
