@@ -370,3 +370,53 @@ eligible set. With exactly one eligible strategy, `decided_by = "only_eligible"`
 measured and reported, and the recommendation states the exclusion with its measured gap.
 **Result:** `fixed` is excluded (gap 0.033 < 0.05), and `sentence` (gap 0.175, threshold 0.567)
 is deployed: `deployed_strategy: "sentence"`.
+
+## Phase 5 — lookup tool, escalation, ACL core (2026-11-07)
+
+### D-029 `cache` and `governance` share the tools rank in the layering test (needs human sign-off)
+**Context:** §ARCH 4 ranks `cache` and `governance` above `tools`, `rag` and `llm`. Three other
+sections need the opposite direction: §7.9 (`RagTool._run` → `ResponseCache.get_or_compute`),
+§7.14.1 (`tools/acl.py` checks `TOOL_ACL` from `governance/policy.py`) and, from Phase 6, §7.14.3
+(the mock LLM in `llm` charges `governance`'s `BudgetMeter`). Under the §4 ranks, each of these
+would be an upward import.
+**Decision:** `LAYER_RANK` in `tests/unit/test_static_rules.py` moves `cache` and `governance` to
+rank 1, next to `tools`/`rag`/`llm`. They depend only on rank 0 (`settings`, `text`,
+`observability`). `FORBIDDEN_IMPORTS` keeps both as leaves of that rank: neither may import
+`tools`, `rag`, `llm` or the other. `pipeline` still sits above all of them. Dependency injection
+was rejected: the ACL signature `assert_allowed(agent_key, tool)` is fixed by §7.14.1 and has no
+slot for the table.
+**Open:** this changes the §4 diagram; the §4 text itself is not edited until the human approves.
+
+### D-030 Phase 5 implementation details within §ARCH 7.7, 7.9, 7.14.1
+* **Escalation:** P80 uses integer arithmetic, `ceil(p·n/100) = -(-p·n // 100)`. A Hypothesis
+  property compares it with an exact `Fraction`, so no float `0.8·n` can round across an integer.
+  The cut-offs (`unflagged_min_days`, `flagged_min_days`) come from evaluating the rounded score
+  itself, not from the closed form. `EscalationConfig` re-derives T and the cut-offs on load, so a
+  hand-edited `config/escalation.json` is rejected. Measured: n = 60, **P80 = 25 days, T = 0.5**;
+  unflagged applications escalate from day 25 and flagged ones from day 5; 16/60 escalate (8/10
+  flagged, 8/50 unflagged).
+* **Config ownership:** `scripts/build_escalation_config.py` (`make escalation-config`, first
+  step of `make bless`; also run by `offline-proof`). New setting `ESCALATION_CONFIG_PATH`.
+  Golden byte-equality is in `tests/golden/test_config.py`.
+* **Record id:** the regex is `^LA-[0-9]{4}$`, ASCII only. `\d` would accept Arabic-Indic and
+  other Unicode digits. Non-string input is `invalid_record_id`. `RecordIdArg` deliberately has
+  no pattern: a malformed id must reach the function and come back as JSON, not as a CrewAI
+  argument-validation error.
+* **Owner binding:** both tools are owner-bound (`RagTool` to `retrieval_agent`, symmetric with
+  `TOOL_ACL`). Each checks `assert_allowed(owner, self)` at construction and again on every
+  `_run`. `assert_allowed` also rejects a tool whose `owner` differs from the agent receiving it.
+  `LeastAutonomyViolation` (a `PermissionError`) is the only exception a tool raises; when it
+  does, nothing is recorded.
+* **Crew audit:** fail-closed on unknown roles (`AGENT_ROLES` maps the §7.9 roles to agent
+  keys), on `allow_delegation` not `False`, and on a task with tools but no agent. Uses duck
+  typing, so it needs no CrewAI import.
+* **Tool outputs** (`schemas.py`): `LoanStatusFound | LoanStatusNotFound` and
+  `RetrievalToolOutput | RagToolError`, exposed as `TypeAdapter`s. A retrieval or generation
+  failure becomes `{"kind":"rag_error","error":"retrieval_unavailable"}` with no exception text
+  and is never cached. Structured logging of the swallowed error lands with §7.17 in Phase 10.
+* **Ledger:** `LedgerEntry(agent, tool, args, duration_ms, cache_hit)`, where `agent` is the
+  owner key the ACL checks (not the display role). The lookup tool has no cache, so its
+  `cache_hit` is always `False`.
+* **Deployment binding:** `rag_tool_for_deployment(config, …)` takes the strategy from
+  `deployed_strategy`, plus its calibrated threshold, `top_k` and `kb_version`, from
+  `config/retrieval.json`. With no deployed strategy or no threshold it raises at wiring time.
