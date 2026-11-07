@@ -138,19 +138,15 @@ class ReviewStage(Protocol):
 
 class AutogenReview:
     """Stage 7 (§ARCH 7.13): the reviewer/editor team on the draft answer. The context is the
-    retrieved chunk texts and, when there is an application record, its JSON and the record's
-    canonical statement (D-038)."""
-
-    def __init__(self, engine: MockEngine | None = None) -> None:
-        self._engine = MockEngine() if engine is None else engine
+    retrieved chunk texts and, when there is an application record, its JSON; the reviewer
+    rebuilds the record's status sentences from that JSON itself (D-039)."""
 
     def context_for(
         self, query: str, trace: RetrievalTrace | None, lookup: LookupFound | LookupNotFound | None
     ) -> ReviewContext:
         documents = [] if trace is None else list(trace.contexts)
         if isinstance(lookup, LookupFound):
-            documents += [lookup.model_dump_json(exclude={"kind"}),
-                          self._engine.record_statement(lookup)]  # fmt: skip
+            documents.append(lookup.model_dump_json(exclude={"kind"}))
         return ReviewContext(question=query, documents=tuple(documents))
 
     async def review(
@@ -245,7 +241,7 @@ class Orchestrator:
         self._max_tokens = s.budget_max_tokens if max_tokens is None else max_tokens
         self._preflight = PassThroughPreflight(self._max_tokens) if preflight is None else preflight
         self._engine = MockEngine() if engine is None else engine
-        self._review = AutogenReview(self._engine) if review is None else review
+        self._review = AutogenReview() if review is None else review
         self._guard = GroundednessGuard(self._engine) if guard is None else guard
         self._sink = NullSink() if sink is None else sink
         self._timeout_s = s.request_timeout_s if timeout_s is None else timeout_s

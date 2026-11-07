@@ -38,7 +38,10 @@ Phase 8 (the Autogen review, §ARCH 7.8.2):
 
 * `review(draft, context)`: the Policy_Compliance_Reviewer's report: one line per draft sentence
   (the support rule above against the context) and, last, `REVIEW_JSON: {"unsupported": [...],
-  "supported_count": n, "total": m}`.
+  "supported_count": n, "total": m}`. A context item that is a found record's JSON is not
+  prose: the reviewer rebuilds that record's status sentences from it with the Composer's own
+  template, and a draft sentence is supported by the record only if it equals one of them
+  (D-039). The draft's wording of the record is never trusted.
 * `edit(review_json, draft)`: the Final_Editor's `ReviewVerdict`. Nothing unsupported →
   approved, `final_answer` is the draft byte for byte. Otherwise the unsupported sentences are
   removed (the rest keep their order and text); nothing left → `FALLBACK_ANSWER`. A report that
@@ -50,12 +53,12 @@ Nothing here knows any query: behaviour comes only from the query tokens and the
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import Final, get_args
 
 from langchain_core.messages import AIMessage, BaseMessage
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from credagent.rag.retriever import NO_MATCH_SIMILARITY
 from credagent.rag.store import RetrievedChunk
@@ -69,6 +72,7 @@ from credagent.schemas import (
     Intent,
     LoanCategory,
     LoanStatus,
+    LoanStatusFound,
     LookupFound,
     LookupNotFound,
     RagToolError,
@@ -152,7 +156,7 @@ def _age(days: int) -> str:
     return "today" if days == 0 else f"{days} day{'' if days == 1 else 's'} ago"
 
 
-def _status_sentence(app: LookupFound) -> str:
+def _status_sentence(app: LoanStatusFound) -> str:
     escalation = (
         f"It has been referred to a human specialist (escalation score {app.escalation_score} "
         f"≥ threshold {app.escalation_threshold})."
@@ -238,11 +242,17 @@ def _split(text: str) -> list[tuple[int, str]]:
 
 class MockEngine:
     # ------------------------------------------------------------------ support rule
-    def support_report(self, answer: str, context: Sequence[str]) -> SupportReport:
+    def support_report(
+        self, answer: str, context: Sequence[str], *, exact: Collection[str] = ()
+    ) -> SupportReport:
+        """`exact`: sentences that support only an identical answer sentence (D-039)."""
         context_sentences = [s for c in context for _, s in _split(c)]
         context_numbers = {n for c in context for n in extract_numbers(c)}
         out: list[SentenceSupport] = []
         for _, sentence in _split(answer):
+            if sentence in exact:
+                out.append(SentenceSupport(sentence, sentence, 1.0, ()))
+                continue
             best: str | None = None
             recall = 0.0
             for candidate in context_sentences:
@@ -320,7 +330,9 @@ class MockEngine:
 
     # ------------------------------------------------------------------ review (Phase 8)
     def review(self, draft: str, context: Sequence[str]) -> str:
-        report = self.support_report(draft, context)
+        records, documents = _records(context)
+        canonical = {s for r in records for _, s in _split(_status_sentence(r))}
+        report = self.support_report(draft, documents, exact=canonical)
         lines = [
             f"Policy compliance review: {report.supported_count} of {report.total} sentences are "
             "supported by the retrieved context."
@@ -397,10 +409,6 @@ class MockEngine:
         if status_only and any(t in STATUS_CUES for t in tokens):
             return "clarify"
         return "policy"
-
-    def record_statement(self, app: LookupFound) -> str:
-        """The status answer's statement of the record (the reviewer's context for it, D-038)."""
-        return _status_sentence(app)
 
     def refusal(self, reason: RefusalReason) -> CrewResponse:
         return CrewResponse(
@@ -496,6 +504,18 @@ def _application(app: LookupFound) -> tuple[ApplicationView, Escalation]:
 
 # ------------------------------------------------------------------ review (Phase 8)
 REVIEW_JSON_PREFIX: Final = "REVIEW_JSON: "
+
+
+def _records(context: Sequence[str]) -> tuple[list[LoanStatusFound], list[str]]:
+    """Split the review context into found-record JSON items and the other documents."""
+    records: list[LoanStatusFound] = []
+    documents: list[str] = []
+    for item in context:
+        try:
+            records.append(LoanStatusFound.model_validate_json(item))
+        except ValidationError:
+            documents.append(item)
+    return records, documents
 
 
 class ReviewFindings(BaseModel):

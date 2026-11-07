@@ -20,6 +20,7 @@ from credagent.pipeline.orchestrator import AutogenReview, Orchestrator
 from credagent.review import team
 from credagent.review.team import ReviewContext, run_review
 from credagent.schemas import FALLBACK_ANSWER
+from tests.unit.test_engine_compose import found
 from tests.unit.test_orchestrator import make
 
 KB08 = (
@@ -54,6 +55,41 @@ async def test_revise_path_removes_the_injected_claim_and_keeps_the_rest_in_orde
 async def test_every_sentence_unsupported_gives_the_fallback() -> None:
     outcome = await run_review("Cred waives every fee forever. Loans are free.", CONTEXT, ctx())
     assert (outcome.verdict.approved, outcome.verdict.final_answer) == (False, FALLBACK_ANSWER)
+
+
+RECORD = found()  # LA-0007, Home, Under Review, ₹25,00,000, 12 days, score 0.24 < 0.5
+STATUS = (
+    "Application LA-0007 (Home loan) is currently Under Review. The loan amount is ₹25,00,000 and "
+    "the application was created 12 days ago. No escalation is needed (escalation score 0.24 < "
+    "threshold 0.5)."
+)
+WRONG_STATUS = "Application LA-0007 (Home loan) is currently Approved."
+WRONG_AMOUNT = "The loan amount is ₹52,00,000 and the application was created 12 days ago."
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("draft", "wrong"),
+    [
+        (STATUS, None),
+        (STATUS.replace("Under Review", "Approved"), WRONG_STATUS),
+        (STATUS.replace("25,00,000", "52,00,000"), WRONG_AMOUNT),
+    ],
+    ids=["correct", "wrong-status", "wrong-amount"],
+)
+async def test_the_status_sentence_is_rebuilt_from_the_record_json_never_from_the_draft(
+    draft: str, wrong: str | None
+) -> None:
+    """D-039: the reviewer builds the record's status sentences from the record JSON with the
+    shared template; a draft sentence about the record must equal one of them."""
+    context = AutogenReview().context_for("Status of LA-0007?", None, RECORD)
+    assert context.documents == (RECORD.model_dump_json(exclude={"kind"}),)  # JSON only
+    outcome = await run_review(draft, context, ctx())
+    assert outcome.error is None
+    assert outcome.verdict.approved is (wrong is None)
+    if wrong is not None:
+        assert wrong in outcome.verdict.reason
+        assert wrong not in outcome.verdict.final_answer
 
 
 class MalformedTeam:
