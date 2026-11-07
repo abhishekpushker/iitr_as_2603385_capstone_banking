@@ -510,3 +510,68 @@ holds `python -V`) exit 0; a live `python3 --version` tool call was blocked by C
 first version also split heredoc bodies and blocked this very entry; fixed before commit.
 **Limits:** it guards Claude Code's Bash tool only, not a human's shell; `bash -c '…'` and `eval`
 are not parsed. A guard rail, not a sandbox.
+
+### D-035 PII masking details within §ARCH 7.12.1
+* **Input:** `text.strip_invisible` first (zero-width and bidi controls removed, then NFKC), so
+  `ABC​PE1234F` and full-width digits are caught. The masked text *is* that stripped text
+  with the replacements; everything downstream sees it.
+* **Spans:** rules run in the §7.12.1 order; a match is kept only if it overlaps no span already
+  taken (within one rule, longest first). Tokens contain no digits, so masking is idempotent.
+* **Boundaries:** "not a letter/digit" lookarounds instead of `\b`, so `_` cannot glue a value to
+  a neighbour (`id_ABCPE1234F_x` is masked).
+* **PAN:** compact form in any case; the space/hyphen-separated form only in capitals, because
+  case-insensitive separators turned ordinary phrases into PANs ("small 5000 a" → `SMALL 5000 A`).
+* **Bank account:** the keyword rule also accepts `#` before the digits (`A/C#…`). Rule 5 is
+  `\d{9,}` (fail-safe: runs longer than 18 digits are masked too, not left whole).
+* **`MaskResult{text, counts_by_type}`**, counts for all three types always present (0 allowed);
+  no values or spans. `total` is a property.
+
+### D-036 Phase 7 pipeline, guard and memory details within §ARCH 6, 7.10, 7.12
+* **Injection (§7.12.2):** runs on the PII-masked text. Normalisation order: strip invisible +
+  NFKC → casefold → join runs of ≥ 3 single characters ("i g n o r e") → collapse whitespace →
+  de-leet. 18 rules; strong families weigh 1.0, ambiguous words less ("act as" 0.5, "you are
+  now" 0.6, the name "Dan" 0.4). `delimiter_smuggling` (any `<<<`/`>>>`, `⟦`/`⟧`, `</system>`,
+  `<|im_start|>`, `[INST]`, `## system`) weighs the full 1.0. Base64 runs ≥ 40 chars weigh 0.6
+  and are decoded and re-scanned; a decoded payload that would block adds 1.0. The 25 + 25 corpus
+  is source data in `eval/injection_corpus.yaml` (`INJECTION_CORPUS_PATH`): 0 FN, 0 FP.
+* **Groundedness (§7.12.3):** the gate also covers `out_of_scope` (a policy question whose
+  retrieval fell short), so the "I don't know" fallback becomes the documented `ungrounded`
+  refusal and the transcript-15 demo actually fires the gate. A policy-type answer without a
+  retrieval trace (RAG tool error) is refused as `retrieval_unavailable`. Sentences are judged
+  policy-first (support rule against the source chunks' texts, read back with
+  `VectorStore.documents`); a sentence that fails it is a *record* sentence only if it is anchored
+  to the application (record id, a loan status, "application"/"escalation", or a number) and the
+  intent has a record, and it must then agree with the record (numbers, id, status, category).
+  Anything else is `unsupported_sentence`.
+* **Follow-ups (§7.10):** references are "its", "this/that/my/the same application|loan", "the
+  same one", and "it" only after a preposition or auxiliary ("for it", "does it", "has it").
+  "is it" is never a reference ("Is it possible …" is an expletive; known limit). A status-only
+  remainder takes the most recent record id; anything else takes the most recent category ("a
+  Business loan"). Nothing to resolve → `clarify`, answered **without** the crew and without
+  review (`review=None`, 0 tokens); clarifications are stored like answers.
+* **Consequence to flag (needs a human view before Phase 11):** masking leaves words like `pan`,
+  `redacted`, `no` in a status question, so D-032 classifies "My PAN is … What is the status of
+  LA-0007?" as `mixed`; its policy half is far below the threshold (0.334) and §7.12.3 then
+  refuses the whole answer. PII-bearing demo/eval queries therefore use a policy question
+  (transcript 13: KYC, top-1 0.583). A possible amendment: drop redaction tokens and their
+  keyword ("PAN", "a/c no") before `classify_intent`.
+* **Timeout:** `REQUEST_TIMEOUT_S` bounds the crew kickoff (§7.9), not the whole pipeline; §5's
+  row is amended. `anyio.to_thread.run_sync(..., abandon_on_cancel=True)` under `fail_after`;
+  the abandoned thread finishes on its own.
+* **Budget:** checked right after kickoff (no review runs on an overrun) and again at stage 9
+  (a later review overrun). Both raise `BudgetExceeded(stage="runtime")`; the preflight raises
+  `stage="preflight"` with zero crew calls. Stage 3 is `PassThroughPreflight` (estimate only,
+  never rejects) until Phase 9.
+* **Interfaces for later phases:** `ReviewStage` (stage 7, `PassThroughReview` approves the draft
+  unchanged), `BudgetPreflight` (stage 3), `RequestSink` + `TurnRecord` (stage 12: one record per
+  request in `finally`, masked text and counts only; Phase 10 writes it as JSON lines).
+  `AskResponse`, `ReviewVerdict`, `ToolCall`, `Usage` live in `schemas.py`, because `pipeline`
+  may not import `api`; `AskResponse` reuses `CrewResponse`'s consistency validator.
+* **Session store:** a session whose lock is held, and the one being accessed, are never evicted;
+  `reset` removes the session.
+* **Regenerated artifacts:** adding `ungrounded` and `injection_detected` to `RefusalReason`
+  lengthens the `CrewResponse` schema in the Composer's prompt by 15 tokens, so transcripts
+  08/09/12 changed only in those counts: policy 3,620, status 3,340, mixed 4,566, unknown id
+  3,234 (D-033 measured 3,605 / 3,325 / 4,551 / 3,219).
+* **Groundedness demo re-verified:** "What is the gold-loan late payment penalty?" top-1 0.555 <
+  0.567 on `kb_sentence_v1` (margin 0.012, as in D-026); it stays the case.

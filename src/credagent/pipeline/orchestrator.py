@@ -44,7 +44,12 @@ from pydantic import ValidationError
 
 from credagent.context import RequestContext, estimate_tokens
 from credagent.crew.factory import SchemaViolation, parse_crew_output
-from credagent.guardrails.groundedness import GroundednessGuard, GuardDecision, RetrievalTrace
+from credagent.guardrails.groundedness import (
+    GroundednessGuard,
+    GuardDecision,
+    RetrievalTrace,
+    SentenceCheck,
+)
 from credagent.guardrails.injection import InjectionDetector
 from credagent.guardrails.pii import PiiMasker, PiiType
 from credagent.llm.engine import CLARIFY_ANSWER, MockEngine
@@ -149,9 +154,11 @@ class TurnRecord:
     injection_score: float = 0.0
     injection_signals: tuple[str, ...] = ()
     standalone_query: str | None = None
-    intent: str | None = None
+    draft_intent: str | None = None  # the crew's, before the gate
+    intent: str | None = None  # the one sent
     guard_reason: str | None = None
     top1_similarity: float | None = None
+    guard_checks: tuple[SentenceCheck, ...] = ()
     review_approved: bool | None = None
     cache_hit: bool = False
     tools_invoked: tuple[ToolCall, ...] = ()
@@ -318,6 +325,7 @@ class Orchestrator:
         with _stage(ctx, "schema"):
             draft = parse_crew_output(output)
             retrieval, lookup = _task_outputs(output, draft)
+        record.draft_intent = draft.intent
         trace = await self._trace(retrieval)
 
         with _stage(ctx, "review"):
@@ -329,6 +337,7 @@ class Orchestrator:
             decision = self._guard.check(verdict.final_answer, draft, trace, found)
         record.guard_reason = decision.reason
         record.top1_similarity = decision.top1_similarity
+        record.guard_checks = decision.checks
 
         with _stage(ctx, "budget_postcheck"):
             self._budget_check(ctx)

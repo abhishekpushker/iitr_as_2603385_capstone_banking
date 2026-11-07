@@ -211,3 +211,15 @@ async def test_busy_sessions_and_the_one_being_accessed_are_never_evicted() -> N
         assert sorted(s.session_ids()) == ["busy", "new"]
     s.get("third")
     assert s.session_ids() == ["third"]
+
+
+def test_the_turn_wrapper_is_a_runnable_with_message_history_over_the_store() -> None:
+    from langchain_core.runnables.history import RunnableWithMessageHistory
+
+    s = store()
+    memory = ConversationMemory(s)
+    assert isinstance(memory.runnable, RunnableWithMessageHistory)
+    assert memory.runnable.get_session_history == s.get
+    assert (memory.runnable.input_messages_key, memory.runnable.history_messages_key) == (
+        "input", "history",
+    )  # fmt: skip

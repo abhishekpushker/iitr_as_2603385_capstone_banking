@@ -149,6 +149,10 @@ class ConversationMemory:
             history_messages_key="history",
         )
 
+    @property
+    def runnable(self) -> RunnableWithMessageHistory:
+        return self._chain
+
     async def run_turn(self, session_id: str, masked_text: str, turn: Turn) -> AIMessage:
         async with self.store.lock(session_id):
             result = await self._chain.ainvoke(

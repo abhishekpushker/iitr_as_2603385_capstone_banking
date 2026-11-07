@@ -313,6 +313,7 @@ async def test_below_threshold_policy_answer_becomes_the_ungrounded_refusal_and_
         REFUSAL_ANSWERS["ungrounded"],
     )
     assert (sink.records[0].outcome, sink.records[0].guard_reason) == ("refused", "below_threshold")
+    assert (sink.records[0].draft_intent, sink.records[0].intent) == ("policy", "refused")
     assert store.history_length("s1") == 2
 
 
