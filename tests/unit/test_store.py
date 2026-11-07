@@ -180,3 +180,28 @@ def test_documents_returns_the_texts_of_known_ids_only(store: VectorStore) -> No
     got = store.documents(name, ["d2::s::000", "d1::s::000", "missing"])
     assert got == {"d2::s::000": "text of d2::s::000", "d1::s::000": "text of d1::s::000"}
     assert store.documents(name, []) == {}
+
+
+def test_similarity_is_exact_and_independent_of_the_index_state(store: VectorStore) -> None:
+    """BUG-005: Chroma's distance comes from its brute-force write buffer or from HNSW, depending
+    on the collection's write history, and differs in the last float32 bits. Those bits reached
+    the prompts (tool output JSON) and so the token counts in golden transcripts. The store
+    computes the cosine itself, in float64, from the stored embeddings."""
+    name = _name()
+    rng = np.random.default_rng(7)
+    vecs = [_unit(list(rng.normal(size=8))) for _ in range(3)]
+    store.upsert(name, ids=["k::s::000", "k::s::001", "k::s::002"], embeddings=vecs,
+                 documents=["a", "b", "c"],
+                 metadatas=[{"doc_id": "k", "char_start": i} for i in range(3)])  # fmt: skip
+    query = _unit(list(rng.normal(size=8)))
+    before = {c.chunk_id: c.similarity for c in store.query(name, query, k=3)}
+    stored = store.collection(name).get(ids=list(before), include=["embeddings"])
+    for cid, emb in zip(stored["ids"], stored["embeddings"], strict=True):
+        e, q = np.asarray(emb, dtype=np.float64), np.asarray(query, dtype=np.float64)
+        assert before[cid] == float(e @ q / (np.linalg.norm(e) * np.linalg.norm(q)))  # bit-exact
+    filler = [_unit(list(rng.normal(size=8))) for _ in range(300)]  # past any write buffer
+    store.upsert(name, ids=[f"f::s::{i:03d}" for i in range(300)], embeddings=filler,
+                 documents=["f"] * 300,
+                 metadatas=[{"doc_id": "f", "char_start": 0}] * 300)  # fmt: skip
+    store.delete(name, [f"f::s::{i:03d}" for i in range(300)])
+    assert {c.chunk_id: c.similarity for c in store.query(name, query, k=3)} == before

@@ -2,8 +2,10 @@
 
 The same class serves production (`chromadb.HttpClient`, via `connect_http`) and unit tests
 (`chromadb.EphemeralClient`). Collections never get an embedding function (P6: no ONNX download)
-and always use cosine space, so `similarity = 1 − distance` (P7). Every write carries explicit
-embeddings.
+and always use cosine space, so Chroma's nearest neighbours are the most similar (P7). The
+similarity itself is the exact float64 cosine of the stored embedding and the query (= 1 − cosine
+distance, without Chroma's state-dependent float32 rounding, BUG-005). Every write carries
+explicit embeddings.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import chromadb
+import numpy as np
 from chromadb.config import Settings as ChromaSettings
 from pydantic import BaseModel, ConfigDict
 
@@ -112,27 +115,40 @@ class VectorStore:
 
     # ------------------------------------------------------------------ query
     def query(self, name: str, embedding: Sequence[float], k: int) -> list[RetrievedChunk]:
-        """Top-k chunks by cosine similarity, descending; ties broken by chunk_id."""
+        """Top-k chunks by cosine similarity, descending; ties broken by chunk_id.
+
+        Chroma picks the k nearest; the similarity is then computed here, in float64, from the
+        stored embeddings (BUG-005): Chroma's own distance differs in the last float32 bits
+        depending on whether its write buffer or HNSW answered, i.e. on the write history.
+        """
         got = self.collection(name).query(
             query_embeddings=[list(embedding)],
             n_results=k,
-            include=["documents", "metadatas", "distances"],
+            include=["documents", "metadatas", "embeddings"],
         )
+        q = np.asarray(embedding, dtype=np.float64)
+        q_norm = float(np.linalg.norm(q))
+
+        def cosine(stored: Any) -> float:
+            e = np.asarray(stored, dtype=np.float64)
+            return float(e @ q / (np.linalg.norm(e) * q_norm))
+
         rows = sorted(
-            zip(got["ids"][0], got["documents"][0], got["metadatas"][0], got["distances"][0],
-                strict=True),
-            key=lambda r: (-(1.0 - r[3]), r[0]),
+            ((cid, doc, meta, cosine(emb)) for cid, doc, meta, emb in zip(
+                got["ids"][0], got["documents"][0], got["metadatas"][0], got["embeddings"][0],
+                strict=True)),
+            key=lambda r: (-r[3], r[0]),
         )  # fmt: skip
         return [
             RetrievedChunk(
                 chunk_id=cid,
                 doc_id=str(meta["doc_id"]),
                 text=doc,
-                similarity=1.0 - dist,
+                similarity=sim,
                 rank=rank,
                 char_start=int(meta["char_start"]),
             )  # fmt: skip
-            for rank, (cid, doc, meta, dist) in enumerate(rows, start=1)
+            for rank, (cid, doc, meta, sim) in enumerate(rows, start=1)
         ]
 
     def documents(self, name: str, ids: Sequence[str]) -> dict[str, str]:
