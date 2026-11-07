@@ -592,3 +592,40 @@ are not parsed. A guard rail, not a sandbox.
   `tests/conftest.py` gives every `integration` and `e2e` test 300 s unless it sets its own.
 * **CLAUDE.md rule:** injected dependencies default with `is None`, never `x or Default()`
   (an empty `SessionStore` is falsy). The one remaining `crew or FakeCrew()` in the tests is fixed.
+
+### D-038 Phase 8 review-stage details within §ARCH 7.8.2, 7.13
+* **Interfaces:** `ReviewStage.review(ctx, query, draft, trace, lookup) -> ReviewOutcome`
+  (Phase 7's `(ctx, draft, trace) -> ReviewVerdict` had no question and no record).
+  `run_review(draft, context, ctx, inject_claim=None)` keeps the brief's signature; `context` is
+  `ReviewContext(question, documents)`. `ReviewOutcome = (verdict, draft, messages, error)`.
+  `ReviewVerdict` stays in `schemas.py` (D-036), so there is no `review/models.py`.
+  `AutogenReview` (the default stage 7, in `pipeline/orchestrator.py`) replaces
+  `PassThroughReview`, which is removed.
+* **Context documents:** the retrieved chunk texts and, for a found record, its JSON (without
+  `kind`) **plus** `MockEngine.record_statement(record)`. The JSON alone is not enough for the
+  token-based support rule: "₹25,00,000", "created today", "1 day ago" share no surface tokens
+  with `"loan_amount_inr": 2500000, "days_since_created": 0`, so correct status sentences would
+  be flagged. Numbers are still checked against the record.
+* **Delimiters:** task = `<<<QUESTION>>>`, `<<<DRAFT>>>`, `<<<CONTEXT>>>` (items separated by
+  `<<<ITEM>>>`). The reviewer echoes the draft between `<<<DRAFT>>>`/`<<<END_DRAFT>>>` before
+  its report, so the editor, which reads only the reviewer's message, can return the draft byte
+  for byte. User text cannot forge any of these (`<<<` always blocks, P17).
+* **Not reviewed:** refusal and clarification drafts claim nothing (the gate already passes
+  them as `not_applicable`), so stage 7 is skipped and `AskResponse.review` is `None`, as for a
+  memory clarification (D-036).
+* **Fail closed:** any exception in the run or any shape deviation (not exactly
+  `user → Policy_Compliance_Reviewer → Final_Editor`, last not a re-validating
+  `StructuredMessage[ReviewVerdict]`) → the verdict `approved=false` with the `agent_error`
+  refusal text, `reason="review_error: <type>"`; the pipeline sends the `agent_error` refusal,
+  skips the gate, and logs `TurnRecord.review_error = "<type>: <message>"`. No new
+  `RefusalReason`.
+* **Budget:** each `create` charges `ceil(chars/4)` of its input messages under `reviewer` /
+  `editor` (like `MockCrewLLM`, output is not charged); over budget only sets the flag and the
+  stage-9 post-check raises. The review runs in the event loop and is not under
+  `REQUEST_TIMEOUT_S` (which bounds the crew kickoff, D-036).
+* **Measured (transcript 20, review included):** policy 6 calls / 4,229 tokens (review 609),
+  status 6 / 4,087 (747), mixed 7 / 5,667 (1,101). **Flag for Phase 9:** against today's
+  `BUDGET_MAX_TOKENS = 8000` that is 53 % / 51 % / 71 %, above the §7.14.3 "≤ 50 % of budget"
+  invariant. Phase 9 sets the budget from measured overhead, so the values are not changed here.
+* **Artifacts:** transcript 10's tokens per turn rose by 747 / 718 / 605 (the two review calls)
+  and stage-7 wording changed in 10 and 15; 08, 09, 11–14 changed only in their headers.
