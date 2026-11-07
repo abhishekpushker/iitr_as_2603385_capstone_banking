@@ -6,6 +6,9 @@
 * `extract_numbers`: canonical numbers (`₹1.5 lakh` → `150000`, `10,000` → `10000`, `2%`).
 * `split_sentences` / `sentence_spans`: rule-based splitter aware of `p.a.`, `e.g.`, `i.e.`,
   `Rs.`, `No.`, decimals and ellipses (P15).
+* `find_record_id` / `RECORD_ID_CANDIDATE`: an application-id-like token (`LA-` + 1–8 ASCII
+  digits, any case). Well-formedness (`LA-0000`) is the lookup tool's job, so a malformed id
+  reaches it and comes back as `invalid_record_id`.
 """
 
 from __future__ import annotations
@@ -163,3 +166,14 @@ def sentence_spans(text: str) -> list[tuple[int, int]]:
 
 def split_sentences(text: str) -> list[str]:
     return [text[a:b] for a, b in sentence_spans(text)]
+
+
+# ------------------------------------------------------------------ record ids
+
+RECORD_ID_CANDIDATE = re.compile(r"(?<![A-Za-z0-9])LA-[0-9]{1,8}(?![A-Za-z0-9])", re.IGNORECASE)
+
+
+def find_record_id(text: str) -> str | None:
+    """The first application-id-like token, upper-cased, or `None`."""
+    m = RECORD_ID_CANDIDATE.search(text)
+    return m.group().upper() if m else None
