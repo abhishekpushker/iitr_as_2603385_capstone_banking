@@ -120,3 +120,70 @@ def test_sessions_are_isolated_under_threads(store: dict[str, InMemoryChatMessag
     for session in ("s1", "s2"):
         humans = [m.content for m in store[session].messages if isinstance(m, HumanMessage)]
         assert humans == [f"{session}-{i}" for i in range(5)]
+
+
+# ------------------------------------------------------------------ Phase 7: what memory relies on
+def _async_chain(store: dict[str, InMemoryChatMessageHistory]) -> RunnableWithMessageHistory:
+    async def core_turn(inputs: dict[str, Any]) -> AIMessage:
+        if inputs["input"] == "boom":
+            raise RuntimeError("turn failed")
+        return AIMessage(
+            content=f"seen={len(inputs['history'])}:{inputs['input']}:{inputs['extra']}",
+            additional_kwargs={"record_id": "LA-0007", "category": "Home"},
+        )
+
+    return RunnableWithMessageHistory(
+        RunnableLambda(core_turn),
+        get_session_history=store.__getitem__,
+        input_messages_key="input",
+        history_messages_key="history",
+    )
+
+
+async def _aask(chain: RunnableWithMessageHistory, session: str, text: str) -> Any:
+    return await chain.ainvoke(
+        {"input": text, "extra": "x"}, config={"configurable": {"session_id": session}}
+    )
+
+
+@pytest.mark.anyio
+async def test_async_path_writes_history_and_passes_extra_input_keys(
+    store: dict[str, InMemoryChatMessageHistory],
+) -> None:
+    chain = _async_chain(store)
+    assert (await _aask(chain, "s1", "one")).content == "seen=0:one:x"
+    assert (await _aask(chain, "s1", "two")).content == "seen=2:two:x"
+    msgs = store["s1"].messages
+    assert [(type(m), m.content) for m in msgs[::2]] == [
+        (HumanMessage, "one"),
+        (HumanMessage, "two"),
+    ]
+    assert msgs[3].additional_kwargs == {"record_id": "LA-0007", "category": "Home"}
+
+
+@pytest.mark.anyio
+async def test_a_failed_turn_writes_nothing_to_history(
+    store: dict[str, InMemoryChatMessageHistory],
+) -> None:
+    """The orchestrator relies on this: a timeout or budget overrun inside the turn must not
+    leave a half-written exchange in memory."""
+    chain = _async_chain(store)
+    await _aask(chain, "s1", "one")
+    with pytest.raises(RuntimeError, match="turn failed"):
+        await _aask(chain, "s1", "boom")
+    assert len(store["s1"].messages) == 2
+
+
+def test_a_failed_sync_turn_writes_nothing_to_history(
+    store: dict[str, InMemoryChatMessageHistory],
+) -> None:
+    def core_turn(inputs: dict[str, Any]) -> AIMessage:
+        raise RuntimeError("turn failed")
+
+    chain = RunnableWithMessageHistory(
+        RunnableLambda(core_turn), get_session_history=store.__getitem__,
+        input_messages_key="input", history_messages_key="history",
+    )  # fmt: skip
+    with pytest.raises(RuntimeError):
+        _ask(chain, "s1", "x")
+    assert store["s1"].messages == []

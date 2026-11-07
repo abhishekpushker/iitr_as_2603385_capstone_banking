@@ -252,7 +252,9 @@ Module dependency rule (enforced by an import-linter-style unit test that walks 
 | `MAX_MESSAGE_CHARS` | `20000` | Pydantic limit, deliberately **above** the budget cap (§7.14.3) |
 | `BUDGET_MAX_TOKENS` / `BUDGET_MAX_COST_USD` / `PRICE_PER_1K_TOKENS_USD` | calibrated in Phase 9 (initial `8000` / `0.016` / `0.002`) | Runtime budget |
 | `CACHE_MAX_ENTRIES` / `CACHE_TTL_SECONDS` | `512` / `3600` | |
-| `REQUEST_TIMEOUT_S` | `30` | Whole-pipeline timeout |
+| `REQUEST_TIMEOUT_S` | `30` | Crew-kickoff timeout (§6 stage 5, `anyio.fail_after`) → `PipelineTimeout` |
+| `SESSION_MAX` / `SESSION_TTL_S` | `1000` / `3600` | Session memory LRU cap and idle TTL (§7.10) |
+| `INJECTION_CORPUS_PATH` | `/app/eval/injection_corpus.yaml` | The 25 + 25 injection corpus (§7.12.2, transcript 14) |
 | `CREWAI_STORAGE_DIR` / `HOME` | `/tmp/crewai` / `/home/app` | Writable under read-only root fs |
 
 ---
