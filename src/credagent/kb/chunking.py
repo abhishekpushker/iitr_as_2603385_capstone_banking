@@ -11,11 +11,10 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from credagent.kb.loader import KbDocument
 from credagent.text import ABBREVIATIONS, SENTENCE_FINAL_ABBREVIATIONS, sentence_spans
 
 Strategy = Literal["fixed", "sentence"]
@@ -48,7 +47,17 @@ class FixedParams:
 FIXED_PARAMS = FixedParams()
 
 
-def _chunk(doc: KbDocument, strategy: Strategy, index: int, start: int, end: int) -> Chunk:
+class ChunkSource(Protocol):
+    """What chunking reads: a `KbDocument`, or a document added via `/v1/documents`."""
+
+    @property
+    def doc_id(self) -> str: ...
+
+    @property
+    def body(self) -> str: ...
+
+
+def _chunk(doc: ChunkSource, strategy: Strategy, index: int, start: int, end: int) -> Chunk:
     return Chunk(
         chunk_id=f"{doc.doc_id}::{strategy}::{index:03d}",
         doc_id=doc.doc_id,
@@ -97,7 +106,7 @@ def _next_start(body: str, start: int, end: int, p: FixedParams) -> int:
     return nxt
 
 
-def chunk_fixed(doc: KbDocument, params: FixedParams = FIXED_PARAMS) -> list[Chunk]:
+def chunk_fixed(doc: ChunkSource, params: FixedParams = FIXED_PARAMS) -> list[Chunk]:
     body, start = doc.body, 0
     chunks: list[Chunk] = []
     while start < len(body) and body[start].isspace():
@@ -111,11 +120,11 @@ def chunk_fixed(doc: KbDocument, params: FixedParams = FIXED_PARAMS) -> list[Chu
     return chunks
 
 
-def chunk_sentences(doc: KbDocument) -> list[Chunk]:
+def chunk_sentences(doc: ChunkSource) -> list[Chunk]:
     return [_chunk(doc, "sentence", i, a, b) for i, (a, b) in enumerate(sentence_spans(doc.body))]
 
 
-def chunk_document(doc: KbDocument, strategy: Strategy) -> list[Chunk]:
+def chunk_document(doc: ChunkSource, strategy: Strategy) -> list[Chunk]:
     if strategy == "fixed":
         return chunk_fixed(doc)
     if strategy == "sentence":

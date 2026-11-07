@@ -77,7 +77,7 @@ from credagent.settings import Settings, get_settings
 from credagent.tools import escalation as esc
 from credagent.tools.acl import LeastAutonomyViolation, audit_crew
 from credagent.tools.lookup_tool import LoanStatusTool
-from scripts import validate_dataset
+from scripts import transcripts_api, validate_dataset
 from scripts.indexer import CollectionNames
 from scripts.transcript_kit import Transcript
 
@@ -2260,6 +2260,7 @@ GENERATORS: dict[str, tuple[str, Generator]] = {
     "23_budget_cap": ("Governance: runtime budget cap — measured, preflight, overrun (Task 15)",
                       budget_cap),
 }  # fmt: skip
+GENERATORS |= transcripts_api.GENERATORS  # 16, 17, 18, 24: the API over HTTP and WS
 
 
 def main(argv: Sequence[str] | None = None) -> int:

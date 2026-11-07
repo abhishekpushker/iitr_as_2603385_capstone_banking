@@ -16,6 +16,15 @@ x-app-env: &app-env
     - path: .env
       required: false
 
+# `up --wait` returns once the API is ready (/readyz: services built, Chroma and both collections),
+# not merely alive (the image HEALTHCHECK probes /healthz).
+x-ready-check: &ready-check
+  test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=2)"]
+  interval: 2s
+  timeout: 3s
+  retries: 60
+  start_period: 10s
+
 x-runtime-build: &runtime-build
   context: .
   dockerfile: docker/Dockerfile
@@ -63,6 +72,7 @@ services:
     networks: [backend, edge]
     ports:
       - "127.0.0.1:8000:8000"
+    healthcheck: *ready-check
     depends_on:
       indexer: {condition: service_completed_successfully}
 
@@ -111,6 +121,7 @@ services:
     volumes:
       - logs:/data/logs
     networks: [backend]
+    healthcheck: *ready-check
     depends_on:
       indexer: {condition: service_completed_successfully}
 

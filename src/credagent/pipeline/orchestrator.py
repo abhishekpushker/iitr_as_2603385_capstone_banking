@@ -24,8 +24,9 @@ from the API (Phase 10) to the agent. Every stage records its duration in `ctx.t
 12  log         RequestSink.emit(TurnRecord) in `finally`, exactly once, masked fields only
 ```
 
-Stage 3 is `governance.budget.BudgetPolicy` behind `BudgetPreflight`; stage 12's JSON-lines
-logger arrives in Phase 10 behind `RequestSink`.
+Stage 3 is `governance.budget.BudgetPolicy` behind `BudgetPreflight`. Stage 12 is a
+`RequestSink`: the API passes a `RecordCollector`, and its middleware / WS loop writes the JSON
+line (`observability.logging`); scripts pass their own sink, the default is `NullSink`.
 Errors propagate as typed exceptions (`PipelineTimeout`, `BudgetExceeded`, `SchemaViolation`)
 for the API to map to 504 / 413 / 500, after the record is emitted with its outcome and error
 code.
@@ -34,6 +35,7 @@ code.
 from __future__ import annotations
 
 import functools
+import threading
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -45,7 +47,7 @@ import anyio.to_thread
 from langchain_core.messages import AIMessage, BaseMessage
 from pydantic import ValidationError
 
-from credagent.context import CallUsage, RequestContext
+from credagent.context import CallUsage, LedgerEntry, RequestContext
 from credagent.crew.factory import SchemaViolation, parse_crew_output
 from credagent.governance.budget import BudgetPolicy, PreflightResult
 from credagent.guardrails.groundedness import (
@@ -58,6 +60,7 @@ from credagent.guardrails.injection import InjectionDetector
 from credagent.guardrails.pii import PiiMasker, PiiType
 from credagent.llm.engine import CLARIFY_ANSWER, MockEngine
 from credagent.memory.session import ConversationMemory
+from credagent.observability.metrics import Metrics
 from credagent.review.team import ReviewContext, ReviewOutcome, run_review
 from credagent.schemas import (
     LOOKUP_TASK_OUTPUT,
@@ -169,6 +172,7 @@ class TurnRecord:
     cost_estimated_usd: float = 0.0
     timings_ms: dict[str, float] = field(default_factory=dict)
     error_code: str | None = None
+    history_length: int | None = None  # messages in the session after the turn
 
 
 class RequestSink(Protocol):
@@ -178,6 +182,24 @@ class RequestSink(Protocol):
 class NullSink:
     def emit(self, record: TurnRecord) -> None:
         return None
+
+
+class RecordCollector:
+    """Stage 12 for the API (§ARCH 7.17): keeps each record until the request middleware or the
+    WS loop takes it by trace id and writes the one `event=request` line with the transport's
+    fields (method, path, status code) added."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._records: dict[str, TurnRecord] = {}
+
+    def emit(self, record: TurnRecord) -> None:
+        with self._lock:
+            self._records[record.trace_id] = record
+
+    def take(self, trace_id: str) -> TurnRecord | None:
+        with self._lock:
+            return self._records.pop(trace_id, None)
 
 
 # ------------------------------------------------------------------ one turn's result
@@ -211,6 +233,7 @@ class Orchestrator:
         guard: GroundednessGuard | None = None,
         engine: MockEngine | None = None,
         sink: RequestSink | None = None,
+        metrics: Metrics | None = None,
         timeout_s: float | None = None,
         max_tokens: int | None = None,
         price_per_1k_tokens_usd: float | None = None,
@@ -229,6 +252,7 @@ class Orchestrator:
         self._review = AutogenReview() if review is None else review
         self._guard = GroundednessGuard(self._engine) if guard is None else guard
         self._sink = NullSink() if sink is None else sink
+        self._metrics = metrics  # `llm_calls{persona}` for /v1/stats (§ARCH 7.15), if given
         self._timeout_s = s.request_timeout_s if timeout_s is None else timeout_s
         self._price = (
             s.price_per_1k_tokens_usd if price_per_1k_tokens_usd is None
@@ -289,7 +313,7 @@ class Orchestrator:
             raise
         finally:
             entries = ctx.ledger.entries()
-            ctx.timings_ms["rag"] = sum(e.duration_ms for e in entries if e.tool == "rag_lookup")
+            ctx.timings_ms["rag"] = _rag_ms(entries)
             ctx.timings_ms["total"] = (time.perf_counter() - start) * 1000
             record.tools_invoked = tuple(
                 ToolCall(agent=e.agent, tool=e.tool, args=e.args, cache_hit=e.cache_hit)
@@ -298,8 +322,12 @@ class Orchestrator:
             record.cache_hit = any(e.cache_hit for e in entries)
             record.tokens_estimated = ctx.budget.used_tokens
             record.llm_usage = ctx.budget.usage()
+            if self._metrics is not None:
+                for call in record.llm_usage:
+                    self._metrics.incr_llm(call.persona)
             record.cost_estimated_usd = self._cost(ctx.budget.used_tokens)
             record.timings_ms = dict(ctx.timings_ms)
+            record.history_length = self.memory.store.history_length(session_id)
             self._sink.emit(record)
 
     # ------------------------------------------------------------------ stages 4–9
@@ -412,11 +440,16 @@ class Orchestrator:
                     estimated_tokens=ctx.budget.used_tokens, budget_tokens=ctx.budget.max_tokens,
                     estimated_cost_usd=self._cost(ctx.budget.used_tokens),
                 ),
-                timings_ms=dict(ctx.timings_ms),
+                timings_ms={**ctx.timings_ms, "rag": _rag_ms(entries)},
             )  # fmt: skip
 
     def _cost(self, tokens: int) -> float:
         return round(tokens / 1000 * self._price, 8)
+
+
+def _rag_ms(entries: Sequence[LedgerEntry]) -> float:
+    """The rag stage: time spent in `rag_lookup` calls (a cache hit is near zero)."""
+    return sum(e.duration_ms for e in entries if e.tool == "rag_lookup")
 
 
 def _task_outputs(

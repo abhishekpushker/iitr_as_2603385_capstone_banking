@@ -133,8 +133,10 @@ def rag_tool_for_deployment(
     cache: ResponseCache[GeneratedAnswer],
     ledger: ToolCallLedger,
     metrics: Metrics,
+    kb_version: str | None = None,
 ) -> RagTool:
-    """A `RagTool` on the deployed collection with its calibrated threshold and `top_k`."""
+    """A `RagTool` on the deployed collection with its calibrated threshold and `top_k`. The
+    cache key uses `kb_version` (the live one, after `/v1/documents`) or the config's."""
     strategy = config.deployed_strategy
     if strategy is None:
         raise ValueError("config/retrieval.json has no deployed_strategy (run make eval-chunking)")
@@ -142,4 +144,5 @@ def rag_tool_for_deployment(
         retriever, client, strategy=strategy, threshold=config.threshold_for(strategy),
         top_k=config.top_k, metrics=metrics,
     )  # fmt: skip
-    return RagTool(generator=generator, cache=cache, kb_version=config.kb_version, ledger=ledger)
+    version = config.kb_version if kb_version is None else kb_version
+    return RagTool(generator=generator, cache=cache, kb_version=version, ledger=ledger)

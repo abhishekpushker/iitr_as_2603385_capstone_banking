@@ -88,14 +88,14 @@ test-integration: ## integration layer (chroma up)
 test-e2e: ## e2e layer (api-offline up)
 	ci/run_layer.sh e2e api-offline
 
-test-security: ## security layer (canary, injection corpus, auth, offline)
-	ci/run_layer.sh security
+test-security: ## security layer (canary, injection corpus, auth, offline) against api-offline
+	ci/run_layer.sh security api-offline
 
 golden: ## regenerate deterministic artifacts into a temp dir and diff (from Phase 1)
 	ci/run_layer.sh golden chroma indexer
 
-pii-scan: ## PII canary scan over every sink (§ARCH 11.6) — runs the whole security layer
-	ci/run_layer.sh security
+pii-scan: ## PII canary scan over every sink and endpoint (§ARCH 11.6) + docker compose logs
+	ci/pii_scan.sh
 
 offline-proof: ## egress probe from the backend network (+ graded scripts as they appear)
 	$(RUN_TESTS) python -m scripts.offline_probe

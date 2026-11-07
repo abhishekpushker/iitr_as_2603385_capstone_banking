@@ -42,6 +42,7 @@ ignore = [
 "scripts/make_transcripts.py" = [
   "PLR2004", # checks restate the spec's literal thresholds independently of the code under test
 ]
+"scripts/transcripts_api.py" = ["PLR2004"]  # same: status codes and counts restated from the spec
 
 [tool.ruff.lint.isort]
 known-first-party = ["credagent", "dataset", "scripts", "tests"]

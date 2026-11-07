@@ -25,6 +25,7 @@ from credagent.cache.response_cache import ResponseCache
 from credagent.context import RequestContext
 from credagent.crew.agents import PERSONAS, make_agent
 from credagent.crew.tasks import make_tasks
+from credagent.kb.version import KbVersion
 from credagent.llm.crewai_llm import MockCrewLLM
 from credagent.llm.engine import MockEngine
 from credagent.observability.metrics import Metrics
@@ -52,12 +53,14 @@ class CrewDeps:
     metrics: Metrics
     engine: MockEngine = field(default_factory=MockEngine)
     escalation_config: EscalationConfig | None = None
+    kb: KbVersion | None = None  # the live kb_version (P13); None → the config's
 
 
 def build_crew(ctx: RequestContext, query: str, deps: CrewDeps) -> Crew:
     rag = rag_tool_for_deployment(
         deps.retrieval_config, retriever=deps.retriever, client=deps.engine, cache=deps.cache,
         ledger=ctx.ledger, metrics=deps.metrics,
+        kb_version=None if deps.kb is None else deps.kb.current,
     )  # fmt: skip
     lookup = LoanStatusTool(owner="lookup_agent", ledger=ctx.ledger, config=deps.escalation_config)
     tools: dict[str, list[BaseTool]] = {

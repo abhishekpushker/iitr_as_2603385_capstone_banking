@@ -46,3 +46,15 @@ def test_version_changes_with_chunk_params(monkeypatch: pytest.MonkeyPatch) -> N
     before = kb_version(KB_DIR)
     monkeypatch.setattr(chunking, "FIXED_PARAMS", chunking.FixedParams(size=200))
     assert kb_version(KB_DIR) != before
+
+
+def test_live_version_advances_deterministically_per_added_document() -> None:
+    """P13: `/v1/documents` advances the live kb_version, so every cache key changes."""
+    from credagent.kb.version import KbVersion
+
+    a, b = KbVersion("v0"), KbVersion("v0")
+    assert a.current == "v0"
+    first = a.advance("kb-new-doc", "Body one.")
+    assert re.fullmatch(r"[0-9a-f]{64}", first) and a.current == first
+    assert b.advance("kb-new-doc", "Body one.") == first  # same inputs, same version
+    assert a.advance("kb-new-doc", "Body one.") != first  # a re-add still moves it on

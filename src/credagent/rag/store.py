@@ -88,6 +88,13 @@ class VectorStore:
     def ids(self, name: str) -> set[str]:
         return set(self.collection(name).get(include=[])["ids"])
 
+    def ids_for_doc(self, name: str, doc_id: str) -> list[str]:
+        return list(self.collection(name).get(where={"doc_id": doc_id}, include=[])["ids"])
+
+    def heartbeat(self) -> int:
+        """Raises when the server is unreachable (§ARCH 3.5 readiness)."""
+        return int(self._client.heartbeat())
+
     # ------------------------------------------------------------------ writes
     def upsert(
         self,

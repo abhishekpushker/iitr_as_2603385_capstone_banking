@@ -182,6 +182,19 @@ def test_documents_returns_the_texts_of_known_ids_only(store: VectorStore) -> No
     assert store.documents(name, []) == {}
 
 
+def test_ids_for_doc_and_heartbeat(store: VectorStore) -> None:
+    name = _name()
+    store.upsert(
+        name, ids=["a::s::000", "a::s::001", "b::s::000"],
+        embeddings=[_unit([1.0, 0.0, 0.0])] * 3, documents=["x", "y", "z"],
+        metadatas=[{"doc_id": "a", "char_start": 0}, {"doc_id": "a", "char_start": 2},
+                   {"doc_id": "b", "char_start": 0}],
+    )  # fmt: skip
+    assert sorted(store.ids_for_doc(name, "a")) == ["a::s::000", "a::s::001"]
+    assert store.ids_for_doc(name, "missing") == []
+    assert isinstance(store.heartbeat(), int)
+
+
 def test_similarity_is_exact_and_independent_of_the_index_state(store: VectorStore) -> None:
     """BUG-005: Chroma's distance comes from its brute-force write buffer or from HNSW, depending
     on the collection's write history, and differs in the last float32 bits. Those bits reached

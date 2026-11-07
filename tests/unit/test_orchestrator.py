@@ -510,3 +510,12 @@ async def test_an_unexpected_error_is_logged_as_internal_and_re_raised() -> None
         await orch.handle(T1, "s1")
     assert (sink.records[0].outcome, sink.records[0].error_code) == ("error", "INTERNAL_ERROR")
     assert "total" in sink.records[0].timings_ms
+
+
+@pytest.mark.anyio
+async def test_response_timings_include_the_rag_stage() -> None:
+    """§ARCH 7.15: the cache demo reads `rag` (summed rag_lookup durations) from the response's
+    timings, not only from the log record."""
+    orch, _, sink, _ = make()
+    r = await orch.handle("Is there a prepayment penalty on a floating-rate home loan?", "t-rag")
+    assert r.timings_ms["rag"] == 1.5 == sink.records[-1].timings_ms["rag"]

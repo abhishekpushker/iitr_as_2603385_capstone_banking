@@ -111,3 +111,21 @@ def test_send_after_client_close_raises_disconnect_then_disconnected(
     assert type(second) is WebSocketDisconnected
     assert isinstance(second, RuntimeError)
     assert "once a close message has been sent" in str(second)
+
+
+def test_testclient_websocket_connect_mutates_the_headers_dict() -> None:
+    """BUG-004: `TestClient.websocket_connect(headers=d)` adds the handshake headers to `d` itself
+    (`sec-websocket-key`, `connection`, …). A shared headers constant passed to it then carries a
+    second `Sec-WebSocket-Key` into a real client's handshake, which the server rejects (400).
+    Tests therefore pass a copy."""
+    from starlette.testclient import TestClient
+
+    async def accept_close(ws: WebSocket) -> None:
+        await ws.accept()
+        await ws.close()
+
+    app = Starlette(routes=[WebSocketRoute("/ws", accept_close)])
+    headers = {"X-API-Key": "k"}
+    with TestClient(app).websocket_connect("/ws", headers=headers):
+        pass
+    assert "sec-websocket-key" in headers

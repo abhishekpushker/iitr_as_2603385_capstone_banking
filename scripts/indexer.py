@@ -14,11 +14,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from credagent.kb.chunking import STRATEGIES, Chunk, Strategy, chunk_document, chunk_params
-from credagent.kb.loader import KbDocument, load_kb
+from credagent.kb.chunking import STRATEGIES, Strategy, chunk_document, chunk_params
+from credagent.kb.loader import load_kb
 from credagent.kb.version import kb_version
 from credagent.rag.embedder import Encoder, get_embedder
-from credagent.rag.store import Metadata, VectorStore, connect_http
+from credagent.rag.indexing import chunk_metadata
+from credagent.rag.store import VectorStore, connect_http
 from credagent.settings import Settings, get_settings
 
 
@@ -43,18 +44,6 @@ class IndexReport:
     deleted: dict[str, int]
 
 
-def _metadata(chunk: Chunk, doc: KbDocument, version: str) -> Metadata:
-    return {
-        "doc_id": chunk.doc_id,
-        "strategy": chunk.strategy,
-        "index": chunk.index,
-        "char_start": chunk.char_start,
-        "char_end": chunk.char_end,
-        "kb_version": version,
-        "title": doc.title,
-    }
-
-
 def index_kb(
     kb_dir: Path, store: VectorStore, embedder: Encoder, names: CollectionNames
 ) -> IndexReport:
@@ -70,7 +59,7 @@ def index_kb(
             ids=[c.chunk_id for c, _ in pairs],
             embeddings=embedder.encode([c.text for c, _ in pairs]),
             documents=[c.text for c, _ in pairs],
-            metadatas=[_metadata(c, d, version) for c, d in pairs],
+            metadatas=[chunk_metadata(c, d.title, version) for c, d in pairs],
         )
         stale = sorted(store.ids(name) - {c.chunk_id for c, _ in pairs})
         store.delete(name, stale)
