@@ -434,3 +434,58 @@ it). It never raises; the orchestrator checks the flag (§6 step 9). `RequestCon
 optional fixed `trace_id` so transcripts are reproducible. §4 (diagram, layout, rule) is amended;
 `tests/unit/test_static_rules.py` gains `context` at rank 0 and a test that these classes are
 defined only in `context.py`.
+
+### D-032 Retrieval skips its tool for status-only questions (refines §ARCH 7.8.1 step 5; needs human sign-off)
+**Context:** §7.8.1 step 5 has the Retrieval persona always call `rag_lookup`. Then a pure status
+question ("What is the status of application LA-0007?") would also get whatever policy text
+retrieval finds, and nothing could tell `status` from `mixed`.
+**Decision:** `MockEngine.classify_intent(query, record_id)` removes the record id and checks the
+remaining content tokens against `STATUS_TERMS` (generic status words, plus the `LoanStatus` and
+`LoanCategory` vocabularies taken from the schema `Literal`s). All status words → `status` with an
+id, `clarify` without one when a status cue (`status`, `update`, `approved`, …) is present.
+Otherwise `mixed` with an id, `policy` without. Retrieval skips the tool for `status` and
+`clarify` and answers `{"kind":"retrieval_result","rag":null}`, mirroring the Lookup persona's
+`no_record_id` skip. The Composer re-derives the intent and fails closed (`agent_error`) when the
+task outputs contradict it. No query string is special-cased; the rule only reads tokens.
+**Consequence:** exact LLM calls (retrieval / lookup / composer): policy and out-of-scope 2/1/1,
+status and unknown id 1/2/1, mixed 2/2/1, clarify 1/1/1. The §7.14.3 worst case (crew 5 calls)
+is unchanged. Reverting to "always retrieve" is a one-line change in `_retrieve`.
+
+### D-033 Phase 6 implementation details within §ARCH 7.8.1, 7.9, 7.11
+* **Task outputs:** `RetrievalTaskOutput{kind:"retrieval_result", rag: RetrievalToolOutput |
+  RagToolError | null}` (a wrapper, because the tool output already has `kind:"rag_result"`);
+  the Lookup output is the tool output plus `kind:"lookup_result"` (`LookupFound` /
+  `LookupNotFound`, error adds `no_record_id`). `kind` is required on both.
+* **CrewResponse:** `RefusalReason = budget_exceeded | agent_error | retrieval_unavailable` for
+  now (Phase 7 adds its own). Validators beyond §7.11: `refusal_reason` is set **exactly** when
+  `refused`; `intent == "refused"` exactly when `refused`; a refusal is never grounded; an
+  `escalation` needs an `application`. `sources` is a tuple (a JSON array).
+* **Unknown or malformed id:** answered as `intent="clarify"` ("I couldn't find a loan
+  application with id LA-9999. Please check the id (format LA-0000)."), because §7.11 makes
+  `status` require an application. `text.find_record_id` accepts `LA-` + 1–8 ASCII digits, any
+  case, so a malformed id reaches the tool and comes back as `invalid_record_id`.
+* **Answers:** the status sentence gives status, amount (Indian grouping), age and the
+  escalation decision with score and threshold. It never mentions the fraud flag (the
+  `application` field still carries it). A mixed answer is the status sentence followed by the
+  policy answer; `grounded` then reflects the policy part. Phase 7's groundedness guard must
+  treat the status sentence as grounded in the record, not in the retrieved chunks.
+* **Refusals everywhere are `CrewResponse` JSON.** Retrieval and Lookup emit the same refusal
+  shape on budget overrun or protocol error, and the Composer passes an upstream refusal
+  through, so the crew output always validates (budget overrun: 1/1/1 calls, no tool runs).
+* **Delimiters** live in `llm/crewai_llm.py` (`task_inputs`), not `crew/templates.py`, because
+  `llm` may not import `crew`. The record-id block precedes the query, and the query runs to the
+  **last** `<<<END_QUERY>>>`, so delimiter text inside a query can neither forge an id nor cut
+  the query short (P17 blocking itself is Phase 7).
+* **"Observation:"** inside our JSON (a KB sentence or a query could contain it) is written
+  `Observation:`: the same string after JSON decoding, but never the CrewAI stop word.
+* **Factory:** `build_crew(ctx, query, deps)`. The strategy comes from
+  `config/retrieval.json` (`deployed_strategy`), the record id from the masked query.
+  `run_crew` kicks off without `inputs` (CrewAI then skips interpolation, so braces in a query
+  stay literal; tested) and narrows to `CrewOutput`. `parse_crew_output` raises
+  `SchemaViolation` (§6 step 6). Role strings come from `governance.policy.AGENT_ROLES`.
+* **Measured prompt sizes** (fixed trace ids, transcripts 08/09): policy 3,605 tokens, status
+  3,325, mixed 4,551, unknown id 3,219, against `BUDGET_MAX_TOKENS = 8000`. The mixed crew alone
+  is already 57 % of the budget, above the §7.14.3 "≤ 50 % per eval query" invariant, before the
+  reviewer and editor run. Phase 9 calibrates the budget, so it must expect this.
+* **Transcripts** print floats rounded to 3 decimals (the risk register's float-drift
+  mitigation); the checks use the unrounded values.
