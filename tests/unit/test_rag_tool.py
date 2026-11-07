@@ -11,6 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 from credagent.cache.response_cache import ResponseCache, cache_key
+from credagent.context import ToolCallLedger
 from credagent.kb.chunking import Strategy
 from credagent.llm.engine import MockEngine
 from credagent.observability.metrics import Metrics
@@ -26,7 +27,6 @@ from credagent.schemas import (
     RetrievalToolOutput,
 )
 from credagent.tools.acl import LeastAutonomyViolation
-from credagent.tools.ledger import ToolCallLedger
 from credagent.tools.rag_tool import RagQuery, RagTool, rag_tool_for_deployment
 
 TEXT = "Floating-rate home loans taken by individuals carry no prepayment penalty."

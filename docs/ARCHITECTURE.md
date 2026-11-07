@@ -203,6 +203,7 @@ cred-loan-support-agent/
 │   ├── __init__.py               # sets telemetry env defaults BEFORE anything imports crewai
 │   ├── settings.py               # pydantic-settings; single source of config
 │   ├── schemas.py                # all domain Pydantic models (§7.11)
+│   ├── context.py                # per-request state: RequestContext, BudgetMeter (charge-only), ToolCallLedger (D-031)
 │   ├── text.py                   # tokenizer, sentence splitter, number extraction, normalisation
 │   ├── kb/{loader.py,chunking.py}
 │   ├── rag/{embedder.py,store.py,retriever.py,generator.py,calibration.py,evaluation.py}
@@ -212,9 +213,9 @@ cred-loan-support-agent/
 │   ├── memory/session.py
 │   ├── guardrails/{pii.py,injection.py,groundedness.py}
 │   ├── review/{models.py,team.py}
-│   ├── governance/{budget.py,policy.py}
+│   ├── governance/{budget.py,policy.py}   # policy only: TOOL_ACL, BudgetPolicy (D-031)
 │   ├── cache/response_cache.py
-│   ├── pipeline/{context.py,orchestrator.py}
+│   ├── pipeline/orchestrator.py
 │   ├── observability/{logging.py,metrics.py}
 │   └── api/{app.py,models.py,routes_http.py,routes_ws.py,auth.py,errors.py,middleware.py}
 ├── scripts/                      # thin CLIs over src/: indexer, validate_dataset, calibrate_threshold,
@@ -225,7 +226,7 @@ cred-loan-support-agent/
 └── docs/{ARCHITECTURE.md,IMPLEMENTATION_PLAN.md,GOVERNANCE.md,DECISIONS.md,BUG_LOG.md}
 ```
 
-Module dependency rule (enforced by an import-linter-style unit test that walks the AST): `api → pipeline → {crew, review, guardrails, memory, cache, governance} → {tools, rag, llm} → {kb, text, schemas, settings}`. Lower layers never import upper layers. `dataset.py` imports nothing from `credagent`.
+Module dependency rule (enforced by an import-linter-style unit test that walks the AST): `api → pipeline → {crew, review, guardrails, memory} → {tools, rag, llm, cache, governance} → {kb, text, schemas, context, settings, observability}`. Lower layers never import upper layers. *Amended (D-029, D-031, human-approved 2026-11-07):* `cache` and `governance` share the tools rank, because `RagTool` wraps the cache and the ACL guard in `tools` reads `TOOL_ACL`; both stay leaves of that rank. The per-request state (`RequestContext`, `BudgetMeter`, `ToolCallLedger`) lives in `credagent/context.py` at the bottom rank, so the mock LLM (`llm`) and the tools charge and record into it without importing `governance`. `dataset.py` imports nothing from `credagent`.
 
 ---
 

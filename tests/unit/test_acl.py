@@ -14,10 +14,10 @@ from typing import Any
 import pytest
 
 import dataset
+from credagent.context import ToolCallLedger
 from credagent.governance.policy import AGENT_ROLES, TOOL_ACL
 from credagent.tools import escalation as esc
 from credagent.tools.acl import LeastAutonomyViolation, assert_allowed, audit_crew
-from credagent.tools.ledger import ToolCallLedger
 from credagent.tools.lookup_tool import LoanStatusTool
 
 AGENTS = ("retrieval_agent", "lookup_agent", "composer_agent", "admin_agent", "")

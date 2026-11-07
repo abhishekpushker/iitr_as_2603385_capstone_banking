@@ -11,13 +11,15 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 SRC = REPO / "src" / "credagent"
 
-# §ARCH 4: api → pipeline → {crew, review, guardrails, memory, cache, governance}
-#          → {tools, rag, llm} → {kb, text, schemas, settings}. Same rank may import each other.
+# §ARCH 4: api → pipeline → {crew, review, guardrails, memory}
+#          → {tools, rag, llm, cache, governance} → {kb, text, schemas, context, settings}.
+#          Same rank may import each other.
 # `observability` (counters, later the JSON log formatter) is a leaf every layer may use (D-024).
 # `cache` and `governance` share the tools rank: RagTool wraps the ResponseCache (§7.9), the ACL
-# guard in tools reads governance's TOOL_ACL (§7.14.1), and llm charges the BudgetMeter (D-029).
+# guard in tools reads governance's TOOL_ACL (§7.14.1) (D-029). Per-request state (RequestContext,
+# BudgetMeter, ToolCallLedger) is `context`, beside schemas, so llm and tools can share it (D-031).
 LAYER_RANK: dict[str, int] = {
-    "settings": 0, "schemas": 0, "text": 0, "kb": 0, "observability": 0,
+    "settings": 0, "schemas": 0, "context": 0, "text": 0, "kb": 0, "observability": 0,
     "tools": 1, "rag": 1, "llm": 1, "cache": 1, "governance": 1,
     "crew": 2, "review": 2, "guardrails": 2, "memory": 2,
     "pipeline": 3,
@@ -141,3 +143,17 @@ SCRIPT_DIR = REPO / "scripts"
 def test_scripts_read_the_environment_only_through_settings(path: Path) -> None:
     lines = list(_env_accesses(ast.parse(path.read_text(encoding="utf-8"))))
     assert lines == [], f"{path} reads the environment directly at lines {lines}"
+
+
+STATE_CLASSES = {"RequestContext", "BudgetMeter", "ToolCallLedger", "LedgerEntry"}
+
+
+def test_per_request_state_is_defined_only_in_context() -> None:
+    """D-031: governance keeps policy only; the request state lives in `credagent/context.py`."""
+    owners = {
+        node.name: path.relative_to(SRC).as_posix()
+        for path in _modules()
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(node, ast.ClassDef) and node.name in STATE_CLASSES
+    }
+    assert owners == dict.fromkeys(STATE_CLASSES, "context.py")

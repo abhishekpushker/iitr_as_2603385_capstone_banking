@@ -25,11 +25,11 @@ from crewai.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 import dataset
+from credagent.context import ToolCallLedger
 from credagent.schemas import RECORD_ID_PATTERN, LoanStatusFound, LoanStatusNotFound
 from credagent.settings import get_settings
 from credagent.tools.acl import assert_allowed
 from credagent.tools.escalation import EscalationConfig, load_escalation_config, should_escalate
-from credagent.tools.ledger import ToolCallLedger
 
 TOOL_NAME: Final = "check_loan_application_status"
 _RECORD_ID: Final = re.compile(RECORD_ID_PATTERN)

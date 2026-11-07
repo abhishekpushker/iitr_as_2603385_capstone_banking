@@ -19,6 +19,7 @@ from crewai.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from credagent.cache.response_cache import ResponseCache, cache_key
+from credagent.context import ToolCallLedger
 from credagent.kb.chunking import Strategy
 from credagent.observability.metrics import Metrics
 from credagent.rag.calibration import RetrievalConfig
@@ -26,7 +27,6 @@ from credagent.rag.generator import GroundedGenerator, LLMClient
 from credagent.rag.retriever import SupportsRetrieve
 from credagent.schemas import GeneratedAnswer, RagToolError, RetrievalToolOutput
 from credagent.tools.acl import assert_allowed
-from credagent.tools.ledger import ToolCallLedger
 
 TOOL_NAME: Final = "rag_lookup"
 MAX_QUERY_CHARS: Final = 2000

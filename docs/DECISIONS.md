@@ -373,7 +373,7 @@ is deployed: `deployed_strategy: "sentence"`.
 
 ## Phase 5 — lookup tool, escalation, ACL core (2026-11-07)
 
-### D-029 `cache` and `governance` share the tools rank in the layering test (needs human sign-off)
+### D-029 `cache` and `governance` share the tools rank in the layering test (approved with an amendment, D-031)
 **Context:** §ARCH 4 ranks `cache` and `governance` above `tools`, `rag` and `llm`. Three other
 sections need the opposite direction: §7.9 (`RagTool._run` → `ResponseCache.get_or_compute`),
 §7.14.1 (`tools/acl.py` checks `TOOL_ACL` from `governance/policy.py`) and, from Phase 6, §7.14.3
@@ -385,7 +385,7 @@ rank 1, next to `tools`/`rag`/`llm`. They depend only on rank 0 (`settings`, `te
 `tools`, `rag`, `llm` or the other. `pipeline` still sits above all of them. Dependency injection
 was rejected: the ACL signature `assert_allowed(agent_key, tool)` is fixed by §7.14.1 and has no
 slot for the table.
-**Open:** this changes the §4 diagram; the §4 text itself is not edited until the human approves.
+**Resolved (2026-11-07):** approved, amended by D-031 (the BudgetMeter does not live in `governance`). §4 is updated.
 
 ### D-030 Phase 5 implementation details within §ARCH 7.7, 7.9, 7.14.1
 * **Escalation:** P80 uses integer arithmetic, `ceil(p·n/100) = -(-p·n // 100)`. A Hypothesis
@@ -420,3 +420,17 @@ slot for the table.
 * **Deployment binding:** `rag_tool_for_deployment(config, …)` takes the strategy from
   `deployed_strategy`, plus its calibrated threshold, `top_k` and `kb_version`, from
   `config/retrieval.json`. With no deployed strategy or no threshold it raises at wiring time.
+
+## Phase 6 — mock CrewAI LLM, crew, structured output (2026-11-07)
+
+### D-031 Per-request state lives in `credagent/context.py` (human-approved amendment of D-029)
+**Context:** D-029 put the `BudgetMeter` in `governance`, so `llm` would import `governance`.
+**Decision:** new bottom-layer module `credagent/context.py` (rank 0, beside `schemas`) holds
+`RequestContext`, `BudgetMeter` and `ToolCallLedger`; `tools/ledger.py` moved there unchanged.
+`governance/` keeps policy only (`TOOL_ACL` now, `BudgetPolicy` in Phase 9). The meter is
+charge-only: `charge(persona, tokens)` adds `ceil(chars/4)` tokens, counts calls per persona and
+sets a sticky `exceeded` flag once the total passes `max_tokens` (exactly at the limit is within
+it). It never raises; the orchestrator checks the flag (§6 step 9). `RequestContext.new` takes an
+optional fixed `trace_id` so transcripts are reproducible. §4 (diagram, layout, rule) is amended;
+`tests/unit/test_static_rules.py` gains `context` at rank 0 and a test that these classes are
+defined only in `context.py`.

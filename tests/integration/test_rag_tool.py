@@ -7,6 +7,7 @@ from __future__ import annotations
 import pytest
 
 from credagent.cache.response_cache import ResponseCache
+from credagent.context import ToolCallLedger
 from credagent.llm.engine import MockEngine
 from credagent.observability.metrics import Metrics
 from credagent.rag import calibration as cal
@@ -15,7 +16,6 @@ from credagent.rag.retriever import Retriever, collections_from_settings
 from credagent.rag.store import VectorStore, connect_http
 from credagent.schemas import FALLBACK_ANSWER, GeneratedAnswer, RetrievalToolOutput
 from credagent.settings import get_settings
-from credagent.tools.ledger import ToolCallLedger
 from credagent.tools.rag_tool import RagTool, rag_tool_for_deployment
 from scripts import indexer
 

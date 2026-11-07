@@ -22,6 +22,7 @@ from pydantic import ValidationError
 import dataset
 from credagent import text
 from credagent.cache.response_cache import normalize_query
+from credagent.context import ToolCallLedger
 from credagent.kb.chunking import FIXED_PARAMS, STRATEGIES, Chunk, chunk_document, chunk_params
 from credagent.kb.loader import DISCLAIMER, KbDocument, load_kb
 from credagent.kb.version import kb_version
@@ -36,7 +37,6 @@ from credagent.rag.store import VectorStore, connect_http
 from credagent.schemas import FALLBACK_ANSWER, LOAN_STATUS_OUTPUT, LoanCategory, LoanStatus
 from credagent.settings import Settings, get_settings
 from credagent.tools import escalation as esc
-from credagent.tools.ledger import ToolCallLedger
 from credagent.tools.lookup_tool import LoanStatusTool
 from scripts import validate_dataset
 from scripts.indexer import CollectionNames

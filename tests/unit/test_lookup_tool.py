@@ -12,10 +12,10 @@ from hypothesis import strategies as st
 from pydantic import ValidationError
 
 import dataset
+from credagent.context import ToolCallLedger
 from credagent.schemas import LOAN_STATUS_OUTPUT, LoanStatusFound, LoanStatusNotFound
 from credagent.tools import escalation as esc
 from credagent.tools.acl import LeastAutonomyViolation
-from credagent.tools.ledger import ToolCallLedger
 from credagent.tools.lookup_tool import (
     LoanStatusTool,
     RecordIdArg,
