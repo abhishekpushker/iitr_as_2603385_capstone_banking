@@ -4,10 +4,10 @@
   "max_output_tokens": 298,
   "measured": {
     "llm_calls": 125,
-    "max_actual_total_tokens": 5552,
+    "max_actual_total_tokens": 5577,
     "max_completion_tokens": 298,
     "max_normal_projection_tokens": 14217,
-    "max_prompt_overhead_tokens": 1644,
+    "max_prompt_overhead_tokens": 1650,
     "requests": 22
   },
   "n_llm_calls": 7,
@@ -15,119 +15,119 @@
   "prompt_overhead_tokens": 1700,
   "queries": [
     {
-      "actual_tokens": 4203,
+      "actual_tokens": 4220,
       "input_tokens": 13,
       "llm_calls": 6,
-      "max_completion_tokens": 163,
-      "max_prompt_overhead_tokens": 1593,
+      "max_completion_tokens": 168,
+      "max_prompt_overhead_tokens": 1599,
       "projected_tokens": 14077,
       "source": "t03-sample"
     },
     {
-      "actual_tokens": 4211,
+      "actual_tokens": 4232,
       "input_tokens": 16,
       "llm_calls": 6,
-      "max_completion_tokens": 161,
-      "max_prompt_overhead_tokens": 1590,
+      "max_completion_tokens": 165,
+      "max_prompt_overhead_tokens": 1597,
       "projected_tokens": 14098,
       "source": "t05-demo-1"
     },
     {
-      "actual_tokens": 4182,
+      "actual_tokens": 4201,
       "input_tokens": 21,
       "llm_calls": 6,
-      "max_completion_tokens": 150,
-      "max_prompt_overhead_tokens": 1581,
+      "max_completion_tokens": 156,
+      "max_prompt_overhead_tokens": 1587,
       "projected_tokens": 14133,
       "source": "t05-demo-2"
     },
     {
-      "actual_tokens": 4026,
+      "actual_tokens": 4044,
       "input_tokens": 11,
       "llm_calls": 6,
-      "max_completion_tokens": 141,
-      "max_prompt_overhead_tokens": 1573,
+      "max_completion_tokens": 148,
+      "max_prompt_overhead_tokens": 1579,
       "projected_tokens": 14063,
       "source": "t05-demo-3"
     },
     {
-      "actual_tokens": 4349,
+      "actual_tokens": 4367,
       "input_tokens": 19,
       "llm_calls": 6,
       "max_completion_tokens": 186,
-      "max_prompt_overhead_tokens": 1604,
+      "max_prompt_overhead_tokens": 1610,
       "projected_tokens": 14119,
       "source": "t05-demo-4"
     },
     {
-      "actual_tokens": 4201,
+      "actual_tokens": 4214,
       "input_tokens": 12,
       "llm_calls": 6,
-      "max_completion_tokens": 164,
-      "max_prompt_overhead_tokens": 1595,
+      "max_completion_tokens": 168,
+      "max_prompt_overhead_tokens": 1599,
       "projected_tokens": 14070,
       "source": "t05-demo-5"
     },
     {
-      "actual_tokens": 3653,
+      "actual_tokens": 3660,
       "input_tokens": 10,
       "llm_calls": 6,
       "max_completion_tokens": 94,
-      "max_prompt_overhead_tokens": 1499,
+      "max_prompt_overhead_tokens": 1501,
       "projected_tokens": 14056,
       "source": "t05-out-of-scope"
     },
     {
-      "actual_tokens": 4162,
+      "actual_tokens": 4174,
       "input_tokens": 10,
       "llm_calls": 6,
-      "max_completion_tokens": 160,
-      "max_prompt_overhead_tokens": 1590,
+      "max_completion_tokens": 163,
+      "max_prompt_overhead_tokens": 1594,
       "projected_tokens": 14056,
       "source": "t06-pr-1"
     },
     {
-      "actual_tokens": 4252,
+      "actual_tokens": 4270,
       "input_tokens": 20,
       "llm_calls": 6,
-      "max_completion_tokens": 163,
-      "max_prompt_overhead_tokens": 1593,
+      "max_completion_tokens": 168,
+      "max_prompt_overhead_tokens": 1599,
       "projected_tokens": 14126,
       "source": "t06-pr-2"
     },
     {
-      "actual_tokens": 4057,
+      "actual_tokens": 4078,
       "input_tokens": 15,
       "llm_calls": 6,
-      "max_completion_tokens": 142,
-      "max_prompt_overhead_tokens": 1573,
+      "max_completion_tokens": 149,
+      "max_prompt_overhead_tokens": 1580,
       "projected_tokens": 14091,
       "source": "t06-pr-3"
     },
     {
-      "actual_tokens": 3710,
+      "actual_tokens": 3716,
       "input_tokens": 19,
       "llm_calls": 6,
       "max_completion_tokens": 94,
-      "max_prompt_overhead_tokens": 1499,
+      "max_prompt_overhead_tokens": 1501,
       "projected_tokens": 14119,
       "source": "t06-pr-4"
     },
     {
-      "actual_tokens": 3670,
+      "actual_tokens": 3676,
       "input_tokens": 13,
       "llm_calls": 6,
       "max_completion_tokens": 94,
-      "max_prompt_overhead_tokens": 1499,
+      "max_prompt_overhead_tokens": 1501,
       "projected_tokens": 14077,
       "source": "t06-pr-5"
     },
     {
-      "actual_tokens": 4229,
+      "actual_tokens": 4241,
       "input_tokens": 15,
       "llm_calls": 6,
-      "max_completion_tokens": 164,
-      "max_prompt_overhead_tokens": 1596,
+      "max_completion_tokens": 168,
+      "max_prompt_overhead_tokens": 1600,
       "projected_tokens": 14091,
       "source": "t08-policy"
     },
@@ -141,11 +141,11 @@
       "source": "t09-status"
     },
     {
-      "actual_tokens": 5552,
+      "actual_tokens": 5577,
       "input_tokens": 20,
       "llm_calls": 7,
       "max_completion_tokens": 298,
-      "max_prompt_overhead_tokens": 1644,
+      "max_prompt_overhead_tokens": 1650,
       "projected_tokens": 14126,
       "source": "t09-mixed"
     },
@@ -168,20 +168,20 @@
       "source": "t09-clarify"
     },
     {
-      "actual_tokens": 4260,
+      "actual_tokens": 4257,
       "input_tokens": 33,
       "llm_calls": 6,
-      "max_completion_tokens": 154,
-      "max_prompt_overhead_tokens": 1585,
+      "max_completion_tokens": 153,
+      "max_prompt_overhead_tokens": 1584,
       "projected_tokens": 14217,
       "source": "t13-pii"
     },
     {
-      "actual_tokens": 3660,
+      "actual_tokens": 3666,
       "input_tokens": 11,
       "llm_calls": 6,
       "max_completion_tokens": 94,
-      "max_prompt_overhead_tokens": 1499,
+      "max_prompt_overhead_tokens": 1501,
       "projected_tokens": 14063,
       "source": "t15-groundedness"
     },
@@ -195,20 +195,20 @@
       "source": "t10-memory-t1"
     },
     {
-      "actual_tokens": 4375,
+      "actual_tokens": 4393,
       "input_tokens": 11,
       "llm_calls": 6,
       "max_completion_tokens": 201,
-      "max_prompt_overhead_tokens": 1613,
+      "max_prompt_overhead_tokens": 1619,
       "projected_tokens": 14063,
       "source": "t10-memory-t2"
     },
     {
-      "actual_tokens": 4210,
+      "actual_tokens": 4228,
       "input_tokens": 10,
       "llm_calls": 6,
-      "max_completion_tokens": 163,
-      "max_prompt_overhead_tokens": 1597,
+      "max_completion_tokens": 168,
+      "max_prompt_overhead_tokens": 1603,
       "projected_tokens": 14056,
       "source": "t10-memory-t3"
     }
