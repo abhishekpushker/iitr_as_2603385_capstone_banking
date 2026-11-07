@@ -29,7 +29,9 @@ Phase 7 (memory, §ARCH 7.10):
 * `resolve_followup(query, history)`: a query without its own record id that refers back ("it"
   after a preposition or auxiliary, "its", "this/that/my application", "that loan", "the same
   one") is rewritten into a standalone query from the most recent record id and loan category in
-  the history's AI messages (`additional_kwargs`). A status-only question takes the record id
+  the history's AI messages (`additional_kwargs`). A possessive "its" with a noun phrase
+  before it in the same sentence ("close my account in its first year") refers to that phrase
+  and is not a reference (BUG-003). A status-only question takes the record id
   ("Has it been approved?" → "Has application LA-0007 been approved?"); any other question takes
   the loan category ("eligibility criteria for it" → "… for a Home loan"). Nothing to resolve →
   `clarify`. No side state: a fresh session has an empty history and so no state.
@@ -384,7 +386,7 @@ class MockEngine:
         """§ARCH 7.10. State is read only from `history` (AI messages' `additional_kwargs`), so a
         fresh session has none. A query with its own record id is never rewritten."""
         record_id = find_record_id(query)
-        refs = list(_REFERENCE.finditer(query))
+        refs = [m for m in _REFERENCE.finditer(query) if not _bound_in_sentence(query, m)]
         if record_id is not None or not refs:
             return FollowUp(query, record_id, mentioned_category(query), resolved=False,
                             clarify=False)  # fmt: skip
@@ -539,6 +541,10 @@ _REFERENCE: Final = re.compile(
     r"|should|was|were) it)\b",
     re.IGNORECASE,
 )
+# A noun phrase ("my account", "the card") earlier in the same sentence: a possessive "its" after
+# it refers to that phrase, not to an earlier turn (BUG-003).
+_ANTECEDENT: Final = re.compile(r"\b(?:my|the|a|an|this|that|your|our) [a-z]", re.IGNORECASE)
+_SENTENCE_END: Final = re.compile(r"[.?!](?:\s|$)")
 LOAN_CATEGORY: Final[TypeAdapter[LoanCategory]] = TypeAdapter(LoanCategory)
 _RECORD_ID: Final = re.compile(RECORD_ID_PATTERN)
 _CATEGORY_MENTION: Final = re.compile(
@@ -588,6 +594,14 @@ def _history_state(history: Sequence[BaseMessage]) -> tuple[str | None, LoanCate
 
 def _loan_phrase(category: LoanCategory) -> str:
     return f"{'an' if category[0] in 'AEIOU' else 'a'} {category} loan"
+
+
+def _bound_in_sentence(query: str, ref: re.Match[str]) -> bool:
+    """A possessive "its" with an antecedent noun phrase before it in its own sentence."""
+    if not ref["poss"]:
+        return False
+    start = max((e.end() for e in _SENTENCE_END.finditer(query, 0, ref.start())), default=0)
+    return _ANTECEDENT.search(query, start, ref.start()) is not None
 
 
 def _rewrite(query: str, refs: Sequence[re.Match[str]], noun: str) -> str:

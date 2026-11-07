@@ -103,6 +103,29 @@ def test_expletive_it_is_not_treated_as_a_reference() -> None:
     assert not r.clarify and not r.resolved
 
 
+@pytest.mark.parametrize("history", [[], AFTER_T1], ids=["fresh", "after-t1"])
+@pytest.mark.parametrize(
+    "question",
+    [
+        "What fee applies if I close my account in its first year?",
+        "Is the annual fee on the card waived in its first year?",
+    ],
+)
+def test_its_with_an_antecedent_in_the_same_sentence_is_not_a_reference(
+    question: str, history: list[BaseMessage]
+) -> None:
+    """BUG-003: "its" bound to a noun phrase earlier in the same sentence ("my account … its
+    first year") refers to that phrase, not to an earlier turn: no clarification, no rewrite."""
+    r = ENGINE.resolve_followup(question, history)
+    assert (r.query, r.resolved, r.clarify) == (question, False, False)
+
+
+def test_its_after_a_sentence_boundary_is_still_a_reference() -> None:
+    """The antecedent search stops at the sentence boundary."""
+    r = ENGINE.resolve_followup("Thanks for the answer. What is its status?", AFTER_T1)
+    assert r.resolved and not r.clarify and "its" not in r.query
+
+
 def test_a_reference_at_the_start_is_capitalised() -> None:
     r = ENGINE.resolve_followup("Its prepayment penalty?", AFTER_T1)
     assert r.query == "A Home loan's prepayment penalty?"

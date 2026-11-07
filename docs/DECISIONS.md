@@ -688,3 +688,14 @@ stays under it. New setting `MAX_BODY_BYTES = 65536` (the Phase 10 middleware re
   `test_crew_factory.py::test_make_agent_refuses_a_disallowed_tool_and_an_unknown_agent`, (c)
   `test_acl.py::test_audit_catches_a_tool_smuggled_onto_the_composer`, (d)
   `test_lookup_tool.py::test_owner_tamper_by_assignment_raises_on_run_and_records_nothing`.
+
+### D-042 A possessive "its" bound within its own sentence is not a follow-up (amends D-036; BUG-003)
+D-036 treated every "its" as a reference to an earlier turn, so "What fee applies if I close my
+account in its first year?" in a fresh session got the clarification. Now "its" is a reference
+only if no noun phrase (a determiner `my/the/a/an/this/that/your/our` + a word) comes before it
+in the same sentence; the search stops at `.`, `?` or `!` followed by a space. "it" after a
+preposition or auxiliary is unchanged: in "What are the eligibility criteria for it?" the
+nearer phrase is plural and a determiner rule would break turn 2, so that form keeps the D-036
+behaviour. Known limit: in a follow-up like "Is the rate fixed for its whole tenure?", "its" is
+read as "the rate's" and not resolved from history. Measured effect: P/R query 3 now runs the
+crew (6 calls, 4,057 tokens); the budget constants are unchanged (D-041).
