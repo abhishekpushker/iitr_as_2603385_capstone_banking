@@ -102,11 +102,7 @@ def test_two_renders_differ_only_in_volatile_fields() -> None:
     assert normalise(a.render()) == normalise(b.render())
 
 
-def test_cli_writes_every_registered_transcript(tmp_path: Path) -> None:
-    assert make_transcripts.main(["--out", str(tmp_path)]) == 0
-    written = sorted(p.stem for p in tmp_path.glob("*.md"))
-    assert written == sorted(make_transcripts.GENERATORS)
-    assert "01_dataset_report" in written
+# The all-generators CLI run needs Chroma: tests/integration/test_transcripts_cli.py (BUG-002).
 
 
 def test_cli_only_selects_one(tmp_path: Path) -> None:
