@@ -1,0 +1,217 @@
+{
+  "budget_max_cost_usd": 0.036,
+  "budget_max_tokens": 18000,
+  "max_output_tokens": 298,
+  "measured": {
+    "llm_calls": 119,
+    "max_actual_total_tokens": 5552,
+    "max_completion_tokens": 298,
+    "max_normal_projection_tokens": 14217,
+    "max_prompt_overhead_tokens": 1644,
+    "requests": 22
+  },
+  "n_llm_calls": 7,
+  "price_per_1k_tokens_usd": 0.002,
+  "prompt_overhead_tokens": 1700,
+  "queries": [
+    {
+      "actual_tokens": 4203,
+      "input_tokens": 13,
+      "llm_calls": 6,
+      "max_completion_tokens": 163,
+      "max_prompt_overhead_tokens": 1593,
+      "projected_tokens": 14077,
+      "source": "t03-sample"
+    },
+    {
+      "actual_tokens": 4211,
+      "input_tokens": 16,
+      "llm_calls": 6,
+      "max_completion_tokens": 161,
+      "max_prompt_overhead_tokens": 1590,
+      "projected_tokens": 14098,
+      "source": "t05-demo-1"
+    },
+    {
+      "actual_tokens": 4182,
+      "input_tokens": 21,
+      "llm_calls": 6,
+      "max_completion_tokens": 150,
+      "max_prompt_overhead_tokens": 1581,
+      "projected_tokens": 14133,
+      "source": "t05-demo-2"
+    },
+    {
+      "actual_tokens": 4026,
+      "input_tokens": 11,
+      "llm_calls": 6,
+      "max_completion_tokens": 141,
+      "max_prompt_overhead_tokens": 1573,
+      "projected_tokens": 14063,
+      "source": "t05-demo-3"
+    },
+    {
+      "actual_tokens": 4349,
+      "input_tokens": 19,
+      "llm_calls": 6,
+      "max_completion_tokens": 186,
+      "max_prompt_overhead_tokens": 1604,
+      "projected_tokens": 14119,
+      "source": "t05-demo-4"
+    },
+    {
+      "actual_tokens": 4201,
+      "input_tokens": 12,
+      "llm_calls": 6,
+      "max_completion_tokens": 164,
+      "max_prompt_overhead_tokens": 1595,
+      "projected_tokens": 14070,
+      "source": "t05-demo-5"
+    },
+    {
+      "actual_tokens": 3653,
+      "input_tokens": 10,
+      "llm_calls": 6,
+      "max_completion_tokens": 94,
+      "max_prompt_overhead_tokens": 1499,
+      "projected_tokens": 14056,
+      "source": "t05-out-of-scope"
+    },
+    {
+      "actual_tokens": 4162,
+      "input_tokens": 10,
+      "llm_calls": 6,
+      "max_completion_tokens": 160,
+      "max_prompt_overhead_tokens": 1590,
+      "projected_tokens": 14056,
+      "source": "t06-pr-1"
+    },
+    {
+      "actual_tokens": 4252,
+      "input_tokens": 20,
+      "llm_calls": 6,
+      "max_completion_tokens": 163,
+      "max_prompt_overhead_tokens": 1593,
+      "projected_tokens": 14126,
+      "source": "t06-pr-2"
+    },
+    {
+      "actual_tokens": 0,
+      "input_tokens": 15,
+      "llm_calls": 0,
+      "max_completion_tokens": 0,
+      "max_prompt_overhead_tokens": 0,
+      "projected_tokens": 14091,
+      "source": "t06-pr-3"
+    },
+    {
+      "actual_tokens": 3710,
+      "input_tokens": 19,
+      "llm_calls": 6,
+      "max_completion_tokens": 94,
+      "max_prompt_overhead_tokens": 1499,
+      "projected_tokens": 14119,
+      "source": "t06-pr-4"
+    },
+    {
+      "actual_tokens": 3670,
+      "input_tokens": 13,
+      "llm_calls": 6,
+      "max_completion_tokens": 94,
+      "max_prompt_overhead_tokens": 1499,
+      "projected_tokens": 14077,
+      "source": "t06-pr-5"
+    },
+    {
+      "actual_tokens": 4229,
+      "input_tokens": 15,
+      "llm_calls": 6,
+      "max_completion_tokens": 164,
+      "max_prompt_overhead_tokens": 1596,
+      "projected_tokens": 14091,
+      "source": "t08-policy"
+    },
+    {
+      "actual_tokens": 3973,
+      "input_tokens": 11,
+      "llm_calls": 6,
+      "max_completion_tokens": 178,
+      "max_prompt_overhead_tokens": 1505,
+      "projected_tokens": 14063,
+      "source": "t09-status"
+    },
+    {
+      "actual_tokens": 5552,
+      "input_tokens": 20,
+      "llm_calls": 7,
+      "max_completion_tokens": 298,
+      "max_prompt_overhead_tokens": 1644,
+      "projected_tokens": 14126,
+      "source": "t09-mixed"
+    },
+    {
+      "actual_tokens": 3233,
+      "input_tokens": 11,
+      "llm_calls": 4,
+      "max_completion_tokens": 75,
+      "max_prompt_overhead_tokens": 1454,
+      "projected_tokens": 14063,
+      "source": "t09-unknown"
+    },
+    {
+      "actual_tokens": 0,
+      "input_tokens": 10,
+      "llm_calls": 0,
+      "max_completion_tokens": 0,
+      "max_prompt_overhead_tokens": 0,
+      "projected_tokens": 14056,
+      "source": "t09-clarify"
+    },
+    {
+      "actual_tokens": 4260,
+      "input_tokens": 33,
+      "llm_calls": 6,
+      "max_completion_tokens": 154,
+      "max_prompt_overhead_tokens": 1585,
+      "projected_tokens": 14217,
+      "source": "t13-pii"
+    },
+    {
+      "actual_tokens": 3660,
+      "input_tokens": 11,
+      "llm_calls": 6,
+      "max_completion_tokens": 94,
+      "max_prompt_overhead_tokens": 1499,
+      "projected_tokens": 14063,
+      "source": "t15-groundedness"
+    },
+    {
+      "actual_tokens": 3974,
+      "input_tokens": 11,
+      "llm_calls": 6,
+      "max_completion_tokens": 178,
+      "max_prompt_overhead_tokens": 1505,
+      "projected_tokens": 14063,
+      "source": "t10-memory-t1"
+    },
+    {
+      "actual_tokens": 4375,
+      "input_tokens": 11,
+      "llm_calls": 6,
+      "max_completion_tokens": 201,
+      "max_prompt_overhead_tokens": 1613,
+      "projected_tokens": 14063,
+      "source": "t10-memory-t2"
+    },
+    {
+      "actual_tokens": 4210,
+      "input_tokens": 10,
+      "llm_calls": 6,
+      "max_completion_tokens": 163,
+      "max_prompt_overhead_tokens": 1597,
+      "projected_tokens": 14056,
+      "source": "t10-memory-t3"
+    }
+  ],
+  "rule": "PROMPT_OVERHEAD_TOKENS = ceil100(max(prompt - input)); MAX_OUTPUT_TOKENS = max(completion); BUDGET_MAX_TOKENS = ceil1000(max(2 * max_actual_total, 1.2 * max_normal_projection)); BUDGET_MAX_COST_USD = BUDGET_MAX_TOKENS * price / 1000"
+}
