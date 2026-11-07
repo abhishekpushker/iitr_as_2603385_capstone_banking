@@ -19,6 +19,10 @@ settings.load_profile("credagent")
 
 TESTS_DIR = Path(__file__).resolve().parent
 LAYERS = ("unit", "contract", "integration", "e2e", "security", "golden")
+# pytest-timeout: `timeout = 60` (pyproject) for the in-process layers; the service-backed layers
+# run real kickoffs against Chroma or the API and get 300 s (D-037). An explicit
+# `@pytest.mark.timeout` on a test still wins.
+SERVICE_LAYER_TIMEOUT_S = 300
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
@@ -27,8 +31,11 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         if len(declared) > 1:
             raise pytest.UsageError(f"{item.nodeid}: more than one layer marker {declared}")
         if declared:
-            continue
-        layer = Path(item.path).resolve().relative_to(TESTS_DIR).parts[0]
-        if layer not in LAYERS:
-            raise pytest.UsageError(f"{item.nodeid}: not under a layer directory {LAYERS}")
-        item.add_marker(getattr(pytest.mark, layer))
+            (layer,) = declared
+        else:
+            layer = Path(item.path).resolve().relative_to(TESTS_DIR).parts[0]
+            if layer not in LAYERS:
+                raise pytest.UsageError(f"{item.nodeid}: not under a layer directory {LAYERS}")
+            item.add_marker(getattr(pytest.mark, layer))
+        if layer in {"integration", "e2e"} and item.get_closest_marker("timeout") is None:
+            item.add_marker(pytest.mark.timeout(SERVICE_LAYER_TIMEOUT_S))

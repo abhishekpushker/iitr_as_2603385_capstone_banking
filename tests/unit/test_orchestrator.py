@@ -141,7 +141,8 @@ class ListSink:
 def make(
     crew: FakeCrew | None = None, *, timeout_s: float = 10.0, **parts: Any
 ) -> tuple[Orchestrator, FakeCrew, ListSink, SessionStore]:
-    crew = crew or FakeCrew()
+    if crew is None:
+        crew = FakeCrew()
     store = parts.pop("store", None)
     if store is None:  # not `or`: an empty SessionStore is falsy (it has __len__)
         store = SessionStore(max_sessions=1000, ttl_s=3600)
@@ -290,6 +291,15 @@ async def test_a_status_question_is_answered_with_the_ledger_and_usage() -> None
         "answered", "ws", "status", r.trace_id,
     )  # fmt: skip
     assert store.history_length("s1") == 2
+
+
+@pytest.mark.anyio
+async def test_a_redaction_token_does_not_turn_a_status_question_into_a_mixed_one() -> None:
+    """D-037: "[PAN_REDACTED]" and its keyword are dropped before intent classification."""
+    orch, crew, sink, _ = make()
+    r = await orch.handle("My PAN is ABCPE1234F, status of LA-0007?", "s1")
+    assert crew.queries == ["My PAN is [PAN_REDACTED], status of LA-0007?"]
+    assert (r.intent, sink.records[0].outcome) == ("status", "answered")
 
 
 @pytest.mark.anyio

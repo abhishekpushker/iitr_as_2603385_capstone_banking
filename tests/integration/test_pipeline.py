@@ -22,6 +22,7 @@ T1 = "What is the status of application LA-0007?"
 T2 = "What are the eligibility criteria for it?"
 T3 = "And does it carry a prepayment penalty?"
 GROUNDEDNESS_DEMO = "What is the gold-loan late payment penalty?"  # §ARCH 7.12.3, D-026
+DEMO_MIN_MARGIN = 0.005
 CATEGORY = next(r["category"] for r in dataset.LOAN_APPLICATIONS if r["record_id"] == "LA-0007")
 
 
@@ -107,6 +108,11 @@ async def test_groundedness_demo_is_below_threshold_and_refused(
     r = await orch.handle(GROUNDEDNESS_DEMO, "integration-groundedness")
     record = sink.records[-1]
     assert record.top1_similarity is not None and record.top1_similarity < threshold
+    # D-037: a thinner margin would let a KB or embedding change flip the demo silently.
+    assert threshold - record.top1_similarity >= DEMO_MIN_MARGIN, (
+        record.top1_similarity,
+        threshold,
+    )
     assert (r.refused, r.refusal_reason, r.answer) == (
         True,
         "ungrounded",

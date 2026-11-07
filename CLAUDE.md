@@ -19,6 +19,7 @@ Find the current phase from the latest `phase-NN-green` git tag. Work only on th
 - **Least autonomy.** Only the Lookup Agent may hold `check_loan_application_status`. All agents: `cache=False`, `allow_delegation=False`, `max_iter=4`.
 - **Mock adapter rules (§ARCH 7.8.1):** parse tool observations only inside our own marked assistant message; dispatch tool arguments from `args_schema`, never from tool names; never emit `Observation:`; never raise from `call()` for budget, set the flag instead.
 - Keep the layering in §ARCH 4. All config goes through `credagent/settings.py`.
+- **Injected dependencies default with `is None`, never `x or Default()`** (an empty store or a falsy test double would be silently replaced). D-037.
 
 ## The loop
 ```

@@ -100,6 +100,12 @@ STATUS_CUES: Final = frozenset(
     {"status", "update", "updates", "progress", "stage", "track", "submitted", "review",
      "approved", "rejected", "disbursed"}
 )  # fmt: skip
+# PII redaction tokens (§ARCH 7.12.1, e.g. "[PAN_REDACTED]") and the words that announce them
+# ("My PAN is …", "a/c no. …") say nothing about what is asked, so intent ignores them (D-037).
+REDACTION_TOKEN: Final = re.compile(r"\[[A-Z]+(?:_[A-Z]+)*_REDACTED\]")
+PII_WORDS: Final = frozenset(
+    {"pan", "aadhaar", "aadhar", "bank", "account", "acct", "no", "number"}
+)
 CLARIFY_ANSWER: Final = "Please share your application id (format LA-0000)."
 REFUSAL_ANSWERS: Final[dict[RefusalReason, str]] = {
     "budget_exceeded": (
@@ -304,8 +310,9 @@ class MockEngine:
     # ------------------------------------------------------------------ Composer (Phase 6)
     # ------------------------------------------------------------------ memory (Phase 7)
     def is_status_only(self, query: str) -> bool:
-        """With record ids removed, every content token is a generic status word (D-032)."""
-        return all(t in STATUS_TERMS for t in content_tokens(RECORD_ID_CANDIDATE.sub(" ", query)))
+        """With record ids and PII redactions removed, every content token is a generic status word
+        (D-032, D-037)."""
+        return all(t in STATUS_TERMS for t in _intent_tokens(query))
 
     def resolve_followup(self, query: str, history: Sequence[BaseMessage]) -> FollowUp:
         """§ARCH 7.10. State is read only from `history` (AI messages' `additional_kwargs`), so a
@@ -329,7 +336,7 @@ class MockEngine:
         return FollowUp(_rewrite(query, refs, noun), rid, category, resolved=True, clarify=False)
 
     def classify_intent(self, query: str, record_id: str | None) -> Intent:
-        tokens = content_tokens(RECORD_ID_CANDIDATE.sub(" ", query))
+        tokens = _intent_tokens(query)
         status_only = all(t in STATUS_TERMS for t in tokens)
         if record_id is not None:
             return "status" if status_only else "mixed"
@@ -405,6 +412,14 @@ class MockEngine:
             intent=intent, answer=answer, sources=sources, application=application,
             escalation=escalation, grounded=grounded, refused=False, refusal_reason=None,
         )  # fmt: skip
+
+
+def _intent_tokens(query: str) -> list[str]:
+    """The content tokens that say what is asked: no record id, no PII redaction (D-037)."""
+    text = RECORD_ID_CANDIDATE.sub(" ", query)
+    if not REDACTION_TOKEN.search(text):
+        return content_tokens(text)
+    return [t for t in content_tokens(REDACTION_TOKEN.sub(" ", text)) if t not in PII_WORDS]
 
 
 def _application(app: LookupFound) -> tuple[ApplicationView, Escalation]:

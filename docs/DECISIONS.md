@@ -575,3 +575,20 @@ are not parsed. A guard rail, not a sandbox.
   3,234 (D-033 measured 3,605 / 3,325 / 4,551 / 3,219).
 * **Groundedness demo re-verified:** "What is the gold-loan late payment penalty?" top-1 0.555 <
   0.567 on `kb_sentence_v1` (margin 0.012, as in D-026); it stays the case.
+
+## Phase 8 — Autogen review stage (2026-11-07)
+
+### D-037 Phase 8 pre-steps: intent ignores PII redactions; demo margin; timeouts; `is None`
+* **Intent (amends D-032/D-036):** `MockEngine.classify_intent` and `is_status_only` drop PII
+  redaction tokens (`[PAN_REDACTED]`, `[AADHAAR_REDACTED]`, `[BANK_ACCOUNT_REDACTED]`) and, when
+  one was present, the words that announce them (`pan`, `aadhaar`, `bank`, `account`, `acct`,
+  `no`, `number`). "My PAN is ABCPE1234F, status of LA-0007?" is now `status` and answered, not a
+  `mixed` answer refused for its empty policy half. Without a redaction token nothing changes.
+  Test: `test_orchestrator.py::test_a_redaction_token_does_not_turn_a_status_question_into_a_mixed_one`.
+* **Groundedness demo margin:** the integration demo test now also fails when
+  `threshold − top1 < 0.005` (today 0.012, D-026), so a KB or embedding change cannot leave
+  the demo balanced on the threshold unnoticed.
+* **Timeouts:** pytest-timeout stays `timeout = 60` for unit/contract/security/golden;
+  `tests/conftest.py` gives every `integration` and `e2e` test 300 s unless it sets its own.
+* **CLAUDE.md rule:** injected dependencies default with `is None`, never `x or Default()`
+  (an empty `SessionStore` is falsy). The one remaining `crew or FakeCrew()` in the tests is fixed.
