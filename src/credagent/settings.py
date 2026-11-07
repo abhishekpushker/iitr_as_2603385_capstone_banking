@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     top_k: int = Field(default=3, ge=1, le=20)
     retrieval_config_path: Path = Path("/app/config/retrieval.json")  # generated, Phase 3
     chunking_report_path: Path = Path("/app/eval/results/chunking_pr.md")  # generated, Phase 4
+    escalation_config_path: Path = Path("/app/config/escalation.json")  # generated, Phase 5
 
     api_key: SecretStr = SecretStr("dev-api-key-not-a-secret")
     admin_api_key: SecretStr = SecretStr("dev-admin-key-not-a-secret")

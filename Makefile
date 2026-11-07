@@ -23,7 +23,7 @@ PHASE ?= $(shell ci/next_phase.sh)
 
 .PHONY: help init lock build up down logs index lint format typecheck \
         test-unit test-contract test-unit-contract test-integration test-e2e test-security \
-        golden transcripts eval calibrate eval-chunking bless pii-scan offline-proof \
+        golden transcripts eval calibrate eval-chunking escalation-config bless pii-scan offline-proof \
         gate-fast gate demo clean clean-volumes capture-crewai-fixtures image-size
 
 help: ## list targets
@@ -101,6 +101,7 @@ offline-proof: ## egress probe from the backend network (+ graded scripts as the
 	$(RUN_TOOLS) python -m scripts.offline_probe
 	$(COMPOSE) run --rm -T indexer
 	$(RUN_TOOLS) python -m scripts.validate_dataset
+	$(RUN_TOOLS) python -m scripts.build_escalation_config --out /tmp/escalation.json
 	$(RUN_TOOLS) sh -c 'python -m scripts.calibrate_threshold --out /tmp/retrieval.json \
 	  && python -m scripts.eval_chunking --config /tmp/retrieval.json --report /tmp/chunking_pr.md'
 	$(RUN_TOOLS) python -m scripts.make_transcripts --out /tmp/transcripts
@@ -131,12 +132,16 @@ transcripts: index ## regenerate transcripts/ in the runner (backend network onl
 calibrate: index ## measure calibration similarities on both collections → config/retrieval.json
 	$(RUN_TOOLS) python -m scripts.calibrate_threshold
 
+escalation-config: build ## P80 of days_since_created → threshold T → config/escalation.json
+	$(RUN_TOOLS) python -m scripts.build_escalation_config
+
 # `calibrate` rewrites config/retrieval.json with deployed_strategy = null; `eval-chunking` then
 # sets it from the P/R results (D-027), so bless runs them in this order, before the transcripts.
 eval-chunking: index ## P/R of both chunking strategies → eval/results/chunking_pr.md + deployed_strategy
 	$(RUN_TOOLS) python -m scripts.eval_chunking
 
 bless: ## regenerate and overwrite every committed artifact (review the diff!)
+	$(MAKE) --no-print-directory escalation-config
 	$(MAKE) --no-print-directory calibrate
 	$(MAKE) --no-print-directory eval-chunking
 	$(MAKE) --no-print-directory transcripts

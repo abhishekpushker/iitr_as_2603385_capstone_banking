@@ -14,10 +14,12 @@ SRC = REPO / "src" / "credagent"
 # §ARCH 4: api → pipeline → {crew, review, guardrails, memory, cache, governance}
 #          → {tools, rag, llm} → {kb, text, schemas, settings}. Same rank may import each other.
 # `observability` (counters, later the JSON log formatter) is a leaf every layer may use (D-024).
+# `cache` and `governance` share the tools rank: RagTool wraps the ResponseCache (§7.9), the ACL
+# guard in tools reads governance's TOOL_ACL (§7.14.1), and llm charges the BudgetMeter (D-029).
 LAYER_RANK: dict[str, int] = {
     "settings": 0, "schemas": 0, "text": 0, "kb": 0, "observability": 0,
-    "tools": 1, "rag": 1, "llm": 1,
-    "crew": 2, "review": 2, "guardrails": 2, "memory": 2, "cache": 2, "governance": 2,
+    "tools": 1, "rag": 1, "llm": 1, "cache": 1, "governance": 1,
+    "crew": 2, "review": 2, "guardrails": 2, "memory": 2,
     "pipeline": 3,
     "api": 4,
 }  # fmt: skip
@@ -111,16 +113,19 @@ def test_environment_is_read_only_through_settings(path: Path) -> None:
 FORBIDDEN_IMPORTS: dict[str, set[str]] = {
     "kb": {"crew", "api", "pipeline", "llm", "rag"},
     "rag": {"crew", "api", "pipeline", "llm"},
+    # D-029: re-ranked beside tools, but they stay leaves of that rank (no tool, LLM or retrieval).
+    "cache": {"tools", "rag", "llm", "governance"},
+    "governance": {"tools", "rag", "llm", "cache"},
 }
 _GUARDED = [p for p in _modules() if _component(p) in FORBIDDEN_IMPORTS]
 
 
-def test_kb_and_rag_modules_exist() -> None:
+def test_guarded_modules_exist() -> None:
     assert {_component(p) for p in _GUARDED} == set(FORBIDDEN_IMPORTS)
 
 
 @pytest.mark.parametrize("path", _GUARDED, ids=lambda p: str(p.relative_to(SRC)))
-def test_kb_and_rag_do_not_import_agent_layers(path: Path) -> None:
+def test_guarded_components_avoid_their_forbidden_imports(path: Path) -> None:
     forbidden = FORBIDDEN_IMPORTS[_component(path) or ""]
     tree = ast.parse(path.read_text(encoding="utf-8"))
     hits = [

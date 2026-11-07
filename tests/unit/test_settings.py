@@ -19,7 +19,7 @@ ENV_KEYS = [
     "BUDGET_MAX_COST_USD", "PRICE_PER_1K_TOKENS_USD", "CACHE_MAX_ENTRIES", "CACHE_TTL_SECONDS",
     "REQUEST_TIMEOUT_S", "CREWAI_STORAGE_DIR", "WEB_CONCURRENCY", "GIT_SHA", "IMAGE_ID",
     "EMBED_BATCH_SIZE", "KB_DIR", "CHROMA_CONNECT_ATTEMPTS", "CHROMA_BACKOFF_CAP_S",
-    "COLLECTION_META",
+    "COLLECTION_META", "ESCALATION_CONFIG_PATH",
 ]  # fmt: skip
 
 
@@ -57,6 +57,7 @@ DEFAULTS: dict[str, Any] = {
     "top_k": 3,
     "retrieval_config_path": Path("/app/config/retrieval.json"),
     "chunking_report_path": Path("/app/eval/results/chunking_pr.md"),
+    "escalation_config_path": Path("/app/config/escalation.json"),
     "log_path": Path("/data/logs/requests.jsonl"),
     "max_message_chars": 20000,
     "budget_max_tokens": 8000,

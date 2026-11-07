@@ -1,8 +1,9 @@
 """Golden determinism for generated config and reports (§ARCH 11.8).
 
 `config/retrieval.json` must equal a fresh calibration followed by the chunking evaluation (which
-sets `deployed_strategy`) byte for byte, and `eval/results/chunking_pr.md` must equal the freshly
-rendered P/R report. Intentional changes are re-blessed with `make bless`.
+sets `deployed_strategy`) byte for byte, `eval/results/chunking_pr.md` must equal the freshly
+rendered P/R report, and `config/escalation.json` must equal a fresh build from the dataset.
+Intentional changes are re-blessed with `make bless`.
 """
 
 from __future__ import annotations
@@ -12,11 +13,12 @@ from pathlib import Path
 
 import pytest
 
-from scripts import calibrate_threshold, eval_chunking
+from scripts import build_escalation_config, calibrate_threshold, eval_chunking
 
 REPO = Path(__file__).resolve().parents[2]
 COMMITTED_CONFIG = REPO / "config" / "retrieval.json"
 COMMITTED_REPORT = REPO / "eval" / "results" / "chunking_pr.md"
+COMMITTED_ESCALATION = REPO / "config" / "escalation.json"
 
 
 def _diff(expected: str, actual: str) -> str:
@@ -42,6 +44,14 @@ def test_retrieval_config_matches_a_fresh_calibration_and_evaluation(
     expected = COMMITTED_CONFIG.read_text(encoding="utf-8")
     actual = regenerated[0].read_text(encoding="utf-8")
     assert actual == expected, f"config/retrieval.json drifted:\n{_diff(expected, actual)}"
+
+
+def test_escalation_config_matches_a_fresh_build(tmp_path: Path) -> None:
+    expected = COMMITTED_ESCALATION.read_text(encoding="utf-8")
+    out = tmp_path / "escalation.json"
+    assert build_escalation_config.main(["--out", str(out)]) == 0
+    actual = out.read_text(encoding="utf-8")
+    assert actual == expected, f"config/escalation.json drifted:\n{_diff(expected, actual)}"
 
 
 def test_chunking_report_matches_a_fresh_evaluation(regenerated: tuple[Path, Path]) -> None:

@@ -8,13 +8,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sys
 from collections import Counter
 from collections.abc import Callable, Sequence
 from fractions import Fraction
 from pathlib import Path
-from typing import get_args
+from typing import Any, get_args
+
+from pydantic import ValidationError
 
 import dataset
 from credagent import text
@@ -30,8 +33,11 @@ from credagent.rag.embedder import get_embedder
 from credagent.rag.generator import GroundedGenerator
 from credagent.rag.retriever import Retriever, collections_from_settings
 from credagent.rag.store import VectorStore, connect_http
-from credagent.schemas import FALLBACK_ANSWER, LoanCategory, LoanStatus
+from credagent.schemas import FALLBACK_ANSWER, LOAN_STATUS_OUTPUT, LoanCategory, LoanStatus
 from credagent.settings import Settings, get_settings
+from credagent.tools import escalation as esc
+from credagent.tools.ledger import ToolCallLedger
+from credagent.tools.lookup_tool import LoanStatusTool
 from scripts import validate_dataset
 from scripts.indexer import CollectionNames
 from scripts.transcript_kit import Transcript
@@ -755,6 +761,194 @@ def chunking_precision_recall(t: Transcript) -> None:
     )
 
 
+def _yes(flag: bool) -> str:
+    return "yes" if flag else "no"
+
+
+def _valid_lookup_output(out: str) -> bool:
+    try:
+        LOAN_STATUS_OUTPUT.validate_json(out)
+    except ValidationError:
+        return False
+    return True
+
+
+def lookup_and_escalation(t: Transcript) -> None:
+    s = t.settings
+    records = dataset.LOAN_APPLICATIONS
+    committed_text = s.escalation_config_path.read_text(encoding="utf-8")
+    cfg = esc.load_escalation_config(s.escalation_config_path)
+    fresh = esc.build_config(records)
+    days = sorted(r["days_since_created"] for r in records)
+    n = len(days)
+    rank = math.ceil(Fraction(cfg.percentile, 100) * n)
+    p80, threshold = cfg.p80_days_since_created, cfg.threshold
+    flagged_cut, unflagged_cut = cfg.flagged_min_days, cfg.unflagged_min_days
+    formula_cut = 30 * (threshold - cfg.flag_weight) / cfg.recency_weight
+
+    t.section("Formula")
+    t.code(
+        "recency          = min(max(days_since_created, 0), 30) / 30\n"
+        f"escalation_score = round({cfg.flag_weight} · flagged + {cfg.recency_weight} · recency, "
+        "4)        ∈ [0, 1]\n"
+        f"T                = round({cfg.recency_weight} · P80(days_since_created) / 30, 4)\n"
+        "escalate         ⇔ escalation_score ≥ T"
+    )
+    t.para(
+        "P80 is the **nearest-rank** 80th percentile, `sorted(days)[ceil(0.8 · n) − 1]`, taken "
+        "over the generated dataset (`dataset.LOAN_APPLICATIONS`) by "
+        "`scripts/build_escalation_config.py`, which writes `config/escalation.json`. The lookup "
+        "tool reads the weights and T back from that file."
+    )
+
+    t.section("P80 and T from the dataset")
+    t.para(f"`days_since_created`, sorted (n = {n}):")
+    t.code(", ".join(str(d) for d in days))
+    t.para(
+        f"rank = ceil(0.8 × {n}) = {rank} → P80 = sorted(days)[{rank - 1}] = **{p80} days**  \n"
+        f"T = round({cfg.recency_weight} × {p80} / 30, 4) = **{threshold}**"
+    )
+    t.code(committed_text, "json")
+
+    t.section("What T means")
+    older = sum(d >= p80 for d in days)
+    t.para(
+        f"- **Unflagged** applications score `0.6 · days/30` and escalate from **day "
+        f"{unflagged_cut}** — the P80 age. Those are the oldest applications in the queue: "
+        f"{older} of {n} ({older / n:.1%}) are at least {p80} days old (ties at {p80} days push "
+        "this above 20%). This is the stale-queue rule.\n"
+        f"- **Flagged** applications start at {cfg.flag_weight} and escalate once "
+        f"`days ≥ 30 · (T − {cfg.flag_weight}) / {cfg.recency_weight}` = "
+        f"30 × ({threshold} − {cfg.flag_weight}) / {cfg.recency_weight} = {formula_cut:.1f}, "
+        f"i.e. from **day {flagged_cut}**, so a fraud flag is reviewed within days.\n"
+        f"- It is a weighted blend, not a boolean OR: a brand-new flagged application scores "
+        f"{cfg.score(0, True)} < T = {threshold} and does **not** auto-escalate.\n"
+        "- Known limitation: the score ignores status, so a flagged, already disbursed loan still "
+        "escalates on age alone."
+    )
+    t.table(
+        ["days", "unflagged score", "escalates", "flagged score", "escalates"],
+        [
+            [d, cfg.score(d, False), _yes(cfg.score(d, False) >= threshold),
+             cfg.score(d, True), _yes(cfg.score(d, True) >= threshold)]
+            for d in sorted({0, 1, flagged_cut or 0, (flagged_cut or 0) + 1, 10, 15, 20,
+                             p80 - 1, p80, 30})
+        ],
+    )  # fmt: skip
+    escalated = [
+        r
+        for r in records
+        if cfg.score(r["days_since_created"], r["flagged_for_fraud_review"]) >= threshold
+    ]
+    esc_flagged = sum(r["flagged_for_fraud_review"] for r in escalated)
+    n_flagged = sum(r["flagged_for_fraud_review"] for r in records)
+    t.para(
+        f"Across the dataset {len(escalated)} of {n} applications are recommended for escalation: "
+        f"{esc_flagged} of {n_flagged} flagged and {len(escalated) - esc_flagged} of "
+        f"{n - n_flagged} unflagged."
+    )
+
+    _sample_lookups(t, cfg, records)
+
+    t.check(
+        f"P80 = sorted(days)[ceil(0.8·{n}) − 1] = sorted(days)[{rank - 1}] = {days[rank - 1]} "
+        f"equals config p80 {p80}",
+        days[rank - 1] == p80 == esc.percentile_nearest_rank(days, 80),
+    )
+    t.check(
+        f"T = round(0.6 × {p80} / 30, 4) = {round(0.6 * p80 / 30, 4)} equals config T {threshold}",
+        round(0.6 * p80 / 30, 4) == threshold,
+    )
+    t.check(
+        "`config/escalation.json` equals a fresh build from the dataset byte for byte",
+        committed_text == esc.dumps_config(fresh),
+    )
+    t.check(
+        f"config dataset sha256 matches the dataset ({cfg.dataset_sha256[:12]}…)",
+        cfg.dataset_sha256 == dataset.sha256(records),
+    )
+    t.check(
+        f"unflagged cut-off day {unflagged_cut} equals P80 {p80}",
+        unflagged_cut == p80 and cfg.score(p80, False) >= threshold > cfg.score(p80 - 1, False),
+    )
+    t.check(
+        f"flagged cut-off day {flagged_cut} = ceil(30·(T − 0.4)/0.6) = ceil({formula_cut:.4f})",
+        flagged_cut == max(0, math.ceil(round(formula_cut, 9))),
+    )
+    grid = [(d, f, cfg.score(d, f)) for d in range(31) for f in (False, True)]
+    t.check(
+        "every score over 0–30 days × {unflagged, flagged} is within [0, 1]",
+        all(0.0 <= sc <= 1.0 for *_, sc in grid),
+    )
+    t.check(
+        "score strictly increases with days and with the flag",
+        all(cfg.score(d + 1, f) > cfg.score(d, f) for d in range(30) for f in (False, True))
+        and all(cfg.score(d, True) > cfg.score(d, False) for d in range(31)),
+    )
+    t.check(
+        f"a brand-new flagged application ({cfg.score(0, True)}) does not escalate",
+        cfg.score(0, True) < threshold,
+    )
+
+
+def _sample_lookups(
+    t: Transcript, cfg: esc.EscalationConfig, records: Sequence[dict[str, Any]]
+) -> None:
+    """Five lookups chosen by rule from the dataset, run through the owner-bound tool."""
+    threshold, p80 = cfg.threshold, cfg.p80_days_since_created
+    flagged_cut = cfg.flagged_min_days or 0
+    t.section("Sample lookups")
+    first_flagged_at_cut = next(r for r in records if r["flagged_for_fraud_review"]
+                                and r["days_since_created"] == flagged_cut)  # fmt: skip
+    first_flagged_young = next(r for r in records if r["flagged_for_fraud_review"]
+                               and r["days_since_created"] < flagged_cut)  # fmt: skip
+    first_unflagged_at_p80 = next(r for r in records if not r["flagged_for_fraud_review"]
+                                  and r["days_since_created"] == p80)  # fmt: skip
+    samples: list[tuple[str, str, Callable[[dict[str, object]], bool]]] = [
+        (first_flagged_at_cut["record_id"],
+         f"flagged, {flagged_cut} days: exactly at the flagged cut-off → escalated",
+         lambda o: o["found"] is True and o["escalation_recommended"] is True
+         and o["escalation_score"] == threshold),
+        (f"  {first_flagged_young['record_id'].lower()} ",
+         f"lower-case, padded; flagged but only {first_flagged_young['days_since_created']} days "
+         "old → not escalated",
+         lambda o: o["found"] is True and o["record_id"] == first_flagged_young["record_id"]
+         and o["escalation_recommended"] is False),
+        (first_unflagged_at_p80["record_id"],
+         f"unflagged, {p80} days (the P80 age) → escalated by the stale-queue rule",
+         lambda o: o["found"] is True and o["escalation_recommended"] is True
+         and o["flagged_for_fraud_review"] is False),
+        ("LA-9999", "well-formed but unknown → not_found",
+         lambda o: o == {"found": False, "error": "not_found"}),
+        ("LA-0001' OR '1'='1", "SQL-style injection string → invalid_record_id",
+         lambda o: o == {"found": False, "error": "invalid_record_id"}),
+    ]  # fmt: skip
+    ledger = ToolCallLedger()
+    tool = LoanStatusTool(owner="lookup_agent", ledger=ledger, config=cfg)
+    outputs = []
+    for i, (raw, why, _) in enumerate(samples, start=1):
+        out = tool._run(raw)
+        outputs.append(out)
+        t.para(f"**L{i}** — input `{raw!r}` — {why}")
+        t.code(json.dumps(json.loads(out), indent=2), "json")
+    t.para("Tool-call ledger (`ToolCallLedger`):")
+    t.table(
+        ["#", "agent", "tool", "args", "cache_hit"],
+        [[i, e.agent, e.tool, f"`{json.dumps(e.args)}`", e.cache_hit]
+         for i, e in enumerate(ledger.entries(), start=1)],
+    )  # fmt: skip
+    for i, ((_, why, expect), out) in enumerate(zip(samples, outputs, strict=True), start=1):
+        t.check(
+            f"L{i}: {why} (output validates against the output model)",
+            _valid_lookup_output(out) and expect(json.loads(out)),
+        )
+    t.check(
+        "the ledger records all 5 calls by `lookup_agent` on `check_loan_application_status`",
+        [(e.agent, e.tool, e.args["record_id"]) for e in ledger.entries()]
+        == [("lookup_agent", "check_loan_application_status", raw) for raw, *_ in samples],
+    )
+
+
 GENERATORS: dict[str, tuple[str, Generator]] = {
     "01_dataset_report": ("Dataset report (Task 1)", dataset_report),
     "02_kb_inventory": ("Knowledge-base inventory (Task 2)", kb_inventory),
@@ -765,6 +959,8 @@ GENERATORS: dict[str, tuple[str, Generator]] = {
                                grounded_generation),
     "06_chunking_precision_recall": ("Chunking evaluation: precision / recall (Task 5)",
                                      chunking_precision_recall),
+    "07_lookup_and_escalation": ("Loan lookup tool and escalation threshold (Task 6)",
+                                 lookup_and_escalation),
 }  # fmt: skip
 
 
