@@ -249,8 +249,8 @@ Module dependency rule (enforced by an import-linter-style unit test that walks 
 | `TOP_K` | `3` | |
 | `API_KEY` / `ADMIN_API_KEY` | dev values in `.env.example` | `X-API-Key` header; admin key for `/v1/documents` |
 | `LOG_PATH` | `/data/logs/requests.jsonl` | |
-| `MAX_MESSAGE_CHARS` | `20000` | Pydantic limit, deliberately **above** the budget cap (§7.14.3) |
-| `BUDGET_MAX_TOKENS` / `BUDGET_MAX_COST_USD` / `PRICE_PER_1K_TOKENS_USD` | calibrated in Phase 9 (initial `8000` / `0.016` / `0.002`) | Runtime budget |
+| `MAX_MESSAGE_CHARS` | `16000` | Pydantic limit, deliberately **above** the budget cap (§7.14.3). *Amended (D-040, human-approved 2026-11-07):* was 20,000, but 20,000 × 4 UTF-8 bytes > the 64 KiB body cap. |
+| `BUDGET_MAX_TOKENS` / `BUDGET_MAX_COST_USD` / `PRICE_PER_1K_TOKENS_USD` | measured in Phase 9 into `config/budget.json` (18000 / 0.036 / 0.002; fallback without the file `8000` / `0.016`), D-041 | Runtime budget |
 | `CACHE_MAX_ENTRIES` / `CACHE_TTL_SECONDS` | `512` / `3600` | |
 | `REQUEST_TIMEOUT_S` | `30` | Crew-kickoff timeout (§6 stage 5, `anyio.fail_after`) → `PipelineTimeout` |
 | `SESSION_MAX` / `SESSION_TTL_S` | `1000` / `3600` | Session memory LRU cap and idle TTL (§7.10) |
@@ -523,7 +523,7 @@ Four layers (GOVERNANCE.md covers all four briefly; the brief grades Application
 - `BudgetPolicy.preflight(masked_text)`: `input_tokens = ceil(len/4)`. `projected = N_LLM_CALLS × (PROMPT_OVERHEAD_TOKENS + input_tokens + MAX_OUTPUT_TOKENS)`, where `N_LLM_CALLS = 7` (retrieval 2, lookup 2, composer 1, reviewer 1, editor 1). `PROMPT_OVERHEAD_TOKENS` is **measured** in Phase 9 from real rendered prompts (max over the eval set, rounded up to the next 100) and written to config. Reject if `projected > BUDGET_MAX_TOKENS` or `projected × price > BUDGET_MAX_COST_USD`.
 - `BudgetMeter`: actual tokens charged by every mock call (CrewAI + Autogen). It is the overrun line of defense (§7.8.1 step 1).
 - Rejection → HTTP **413** with `{"error_code":"BUDGET_EXCEEDED","projected_tokens":…,"budget_tokens":…,"trace_id":…}`. Logged with outcome `budget_rejected`. **No crew call is made** (asserted via mock call counter = 0).
-- Calibration invariant (test): every eval query uses ≤ 50% of budget; the demo oversized request (≈ 12,000 chars, under `MAX_MESSAGE_CHARS = 20,000`) exceeds it. The order of limits matters: **body-size limit (64 KiB) > Pydantic max length (20,000 chars) > budget (≈ 8,000 tokens projected)**, so the oversized demo request is rejected by the **budget**, not by Pydantic. A test asserts this ordering from settings.
+- Calibration invariant (test): every eval query uses ≤ 50% of budget; the demo oversized request (≈ 12,000 chars, under `MAX_MESSAGE_CHARS = 16,000`) exceeds it. The order of limits matters: **body-size limit (64 KiB) > Pydantic max length (16,000 chars × ≤ 4 UTF-8 bytes = 64,000 bytes) > budget (measured in Phase 9: 18,000 tokens, rejecting from ≈ 2,300 chars)**, so the oversized demo request is rejected by the **budget**, not by Pydantic. A test asserts this ordering from settings.
 
 ### 7.15 Response cache (Task 16) — `credagent/cache/response_cache.py`
 - Caches the **grounded-generation step** (retrieval + generation) inside `RagTool`.
@@ -538,7 +538,7 @@ Four layers (GOVERNANCE.md covers all four briefly; the brief grades Application
 |---|---|---|---|---|
 | `GET /healthz` | none | — | `{status}` | liveness |
 | `GET /readyz` | none | — | `{status, checks}` | 503 until ready |
-| `POST /v1/ask` | `X-API-Key` | `AskRequest{message: str[1..20000], session_id: str? (^[A-Za-z0-9_-]{8,64}$)}` | `AskResponse` | server generates `session_id` if absent |
+| `POST /v1/ask` | `X-API-Key` | `AskRequest{message: str[1..16000], session_id: str? (^[A-Za-z0-9_-]{8,64}$)}` | `AskResponse` | server generates `session_id` if absent |
 | `POST /v1/documents` | `X-API-Key` = admin | `AddDocumentRequest{doc_id: slug ^kb-[a-z0-9-]{3,60}$, title[3..120], topic[3..60], text[50..4000], overwrite=false}` | `AddDocumentResponse{doc_id, chunks:{fixed:int, sentence:int}, kb_version}` | masks PII; injection-checks; validates 2–5 sentences; indexes **both** collections; 409 on duplicate without overwrite; cache cleared |
 | `DELETE /v1/sessions/{session_id}` | `X-API-Key` | — | 204 | memory reset |
 | `GET /v1/stats` | `X-API-Key` | — | `StatsResponse` | counters for the cache demo |

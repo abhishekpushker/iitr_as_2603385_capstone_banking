@@ -629,3 +629,62 @@ are not parsed. A guard rail, not a sandbox.
   invariant. Phase 9 sets the budget from measured overhead, so the values are not changed here.
 * **Artifacts:** transcript 10's tokens per turn rose by 747 / 718 / 605 (the two review calls)
   and stage-7 wording changed in 10 and 15; 08, 09, 11–14 changed only in their headers.
+
+## Phase 9 — Governance: budget cap, least autonomy, risk (2026-11-07)
+
+### D-039 The reviewer rebuilds a record's status sentences from the record JSON
+* **Problem:** D-038 put `MockEngine.record_statement(record)` into the review context as prose,
+  and draft sentences were checked against it by token recall (≥ 0.6). A status sentence with a
+  wrong status ("… is currently Approved." for an Under Review record) still matched 5 of 6
+  tokens, so the reviewer approved it.
+* **Rule:** the context carries only the record JSON (`model_dump_json(exclude={"kind"})`). The
+  reviewer (`MockEngine.review`) recognises a context item that validates as `LoanStatusFound`,
+  builds that record's sentences with the Composer's own template (`_status_sentence`), and a
+  draft sentence is supported by the record **only if it equals one of them**
+  (`support_report(…, exact=…)`). The draft's wording of the record is never trusted. Other
+  sentences are checked against the remaining documents (the KB chunks) as before.
+  `record_statement` and `AutogenReview`'s unused `engine` parameter are removed.
+* Test: `test_review.py::test_the_status_sentence_is_rebuilt_from_the_record_json_never_from_the_draft`
+  (correct / wrong status / wrong amount). Status and mixed reviews now cost 113 fewer tokens
+  (transcript 20).
+
+### D-040 `MAX_MESSAGE_CHARS` 20,000 → 16,000 (amends §ARCH 5, 7.14.3, 7.16; human-approved)
+The P10 ordering test requires `MAX_MESSAGE_CHARS × 4` (worst-case UTF-8 bytes per char) to be
+below the 64 KiB body cap. 20,000 × 4 = 80,000 > 65,536. The human chose to lower the message
+limit and keep the body cap: 16,000 × 4 = 64,000 < 65,536. The ≈ 12,000-char oversized demo
+stays under it. New setting `MAX_BODY_BYTES = 65536` (the Phase 10 middleware reads it).
+
+### D-041 Budget measurement and wiring within §ARCH 7.14.3
+* **Per-call log:** `BudgetMeter.usage()` keeps one `CallUsage(persona, prompt_tokens,
+  completion_tokens)` per mock call. Both adapters call `record_completion` after they produce
+  output. This is measured only, never charged: the actual total stays input-only, as before.
+  `TurnRecord.llm_usage` carries the log; its length is the "mock LLM call counter" of the
+  zero-call tests.
+* **Measured set (22 requests):** transcript 03 sample, transcript 05 demo (5 + 1), P/R (5),
+  crew 08/09 (policy, status, mixed, unknown, clarify), the PII pipeline query (13), the
+  groundedness query (15), and the three memory turns (10) in one session. Duplicates are
+  dropped. Phase 11 adds `eval/testset.yaml` and re-runs the measurement. Fixed trace ids make the
+  run reproducible; a golden test compares `config/budget.json` to a fresh run.
+* **Overhead definition:** per call, prompt tokens − `ceil(len(masked text)/4)`. Max 1,644 →
+  `PROMPT_OVERHEAD_TOKENS = 1700`; `MAX_OUTPUT_TOKENS = 298` (max completion); max actual 5,552
+  (mixed); max projection 14,217 → `BUDGET_MAX_TOKENS = ceil1000(max(11,104, 17,060.4)) =
+  18,000`, `BUDGET_MAX_COST_USD = 0.036`. The smallest rejected input is 2,293 chars; the
+  12,000-char demo projects 34,986 tokens.
+* **Settings:** a `before` validator fills `budget_max_tokens`, `budget_max_cost_usd`,
+  `prompt_overhead_tokens` and `max_output_tokens` from `BUDGET_CONFIG_PATH`
+  (`/app/config/budget.json`). An environment variable still wins (tests force tiny budgets
+  that way or by constructor). Without the file, the §ARCH 5 initial values apply, so the
+  measuring script can run cold.
+* **Costs** are compared rounded to 8 decimals (`cost_usd`), like every reported cost, so a
+  projection exactly at the cap is not over it.
+* **Stage 3:** `BudgetPolicy(max_tokens=<the orchestrator's>)` is the default preflight;
+  `PassThroughPreflight` is removed. `PreflightResult` lives in `governance/budget.py`.
+  `build_orchestrator` takes `preflight` and `max_tokens` (the measurement and the forced
+  runtime-overrun demo use them).
+* **`make budget`** runs after `eval-chunking` and before `transcripts` in `make bless`, and in
+  `make offline-proof`.
+* **Least-autonomy tests (a)–(d)** already existed (Phases 5–6) and are reused, not duplicated:
+  (a) `test_crew_factory.py::test_audit_passes_on_the_built_crew_and_maps_the_tools`, (b)
+  `test_crew_factory.py::test_make_agent_refuses_a_disallowed_tool_and_an_unknown_agent`, (c)
+  `test_acl.py::test_audit_catches_a_tool_smuggled_onto_the_composer`, (d)
+  `test_lookup_tool.py::test_owner_tamper_by_assignment_raises_on_run_and_records_nothing`.
