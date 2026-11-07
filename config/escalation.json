@@ -1,0 +1,13 @@
+{
+  "dataset_sha256": "92fd6e6696e4437ed8fefe7b2333a9700dfd46ddfcf411f1744231724d39946e",
+  "flag_weight": 0.4,
+  "flagged_min_days": 5,
+  "n_records": 60,
+  "p80_days_since_created": 25,
+  "percentile": 80,
+  "percentile_method": "nearest-rank: sorted(days)[ceil(p/100 * n) - 1]",
+  "recency_cap_days": 30,
+  "recency_weight": 0.6,
+  "threshold": 0.5,
+  "unflagged_min_days": 25
+}
