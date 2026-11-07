@@ -23,7 +23,8 @@ PHASE ?= $(shell ci/next_phase.sh)
 
 .PHONY: help init lock build up down logs index lint format typecheck \
         test-unit test-contract test-unit-contract test-integration test-e2e test-security \
-        golden transcripts eval calibrate eval-chunking escalation-config bless pii-scan offline-proof \
+        golden transcripts eval calibrate eval-chunking escalation-config budget bless pii-scan \
+        offline-proof \
         gate-fast gate demo clean clean-volumes capture-crewai-fixtures image-size
 
 help: ## list targets
@@ -104,6 +105,7 @@ offline-proof: ## egress probe from the backend network (+ graded scripts as the
 	$(RUN_TOOLS) python -m scripts.build_escalation_config --out /tmp/escalation.json
 	$(RUN_TOOLS) sh -c 'python -m scripts.calibrate_threshold --out /tmp/retrieval.json \
 	  && python -m scripts.eval_chunking --config /tmp/retrieval.json --report /tmp/chunking_pr.md'
+	$(RUN_TOOLS) python -m scripts.measure_budget --out /tmp/budget.json
 	$(RUN_TOOLS) python -m scripts.make_transcripts --out /tmp/transcripts
 
 image-size: ## print image sizes (recorded in docs/DECISIONS.md)
@@ -140,10 +142,16 @@ escalation-config: build ## P80 of days_since_created → threshold T → config
 eval-chunking: index ## P/R of both chunking strategies → eval/results/chunking_pr.md + deployed_strategy
 	$(RUN_TOOLS) python -m scripts.eval_chunking
 
+# The pipeline (crew + review) on every eval/demo query, with an unlimited meter → config/budget.json.
+# It runs after eval-chunking (the crew reads deployed_strategy) and before the transcripts (23).
+budget: index ## measure PROMPT_OVERHEAD_TOKENS, MAX_OUTPUT_TOKENS, the budget cap → config/budget.json
+	$(RUN_TOOLS) python -m scripts.measure_budget
+
 bless: ## regenerate and overwrite every committed artifact (review the diff!)
 	$(MAKE) --no-print-directory escalation-config
 	$(MAKE) --no-print-directory calibrate
 	$(MAKE) --no-print-directory eval-chunking
+	$(MAKE) --no-print-directory budget
 	$(MAKE) --no-print-directory transcripts
 	@git status --short -- transcripts config eval/results
 

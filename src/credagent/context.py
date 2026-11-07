@@ -5,7 +5,9 @@ and later `pipeline` share one object without importing each other.
 * `BudgetMeter`: **charge-only**. Every mock-LLM call charges `ceil(chars/4)` tokens (the
   heuristic CrewAI logs for a custom LLM, §ARCH 2.2.8). Passing `max_tokens` sets the sticky
   `exceeded` flag; deciding what to do about it (preflight, HTTP 413) is policy, in
-  `governance` (Phase 9).
+  `governance.budget`. `usage()` keeps one `CallUsage` per call: the prompt tokens charged and
+  the completion tokens the adapter reports afterwards (`record_completion`, not charged). It
+  is what `scripts/measure_budget.py` measures the budget constants from.
 * `ToolCallLedger` (§ARCH 7.9): one entry per tool call, `(agent, tool, args, duration_ms,
   cache_hit)`. It is how transcripts and `tools_invoked` prove which agent actually called which
   tool. `agent` is the owner key the ACL checks (`lookup_agent`, …), not the display role.
@@ -32,6 +34,13 @@ def estimate_tokens(text: str) -> int:
     return math.ceil(len(text) / 4)
 
 
+@dataclass(frozen=True)
+class CallUsage:
+    persona: str
+    prompt_tokens: int
+    completion_tokens: int = 0
+
+
 class BudgetMeter:
     def __init__(self, max_tokens: int) -> None:
         if max_tokens < 1:
@@ -42,6 +51,7 @@ class BudgetMeter:
         self._exceeded = False
         self._calls: dict[str, int] = {}
         self._tokens: dict[str, int] = {}
+        self._usage: list[CallUsage] = []
 
     @property
     def max_tokens(self) -> int:
@@ -65,8 +75,22 @@ class BudgetMeter:
             self._used += tokens
             self._calls[persona] = self._calls.get(persona, 0) + 1
             self._tokens[persona] = self._tokens.get(persona, 0) + tokens
+            self._usage.append(CallUsage(persona, tokens))
             self._exceeded = self._exceeded or self._used > self._max
             return self._exceeded
+
+    def record_completion(self, persona: str, tokens: int) -> None:
+        """Attach a completion size to `persona`'s latest call. Measured only, never charged."""
+        with self._lock:
+            for i in range(len(self._usage) - 1, -1, -1):
+                if self._usage[i].persona == persona:
+                    self._usage[i] = CallUsage(persona, self._usage[i].prompt_tokens, tokens)
+                    return
+        raise ValueError(f"no call charged for persona {persona!r}")
+
+    def usage(self) -> tuple[CallUsage, ...]:
+        with self._lock:
+            return tuple(self._usage)
 
     def calls(self) -> dict[str, int]:
         """LLM calls per persona, sorted by persona."""

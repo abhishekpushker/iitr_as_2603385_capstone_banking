@@ -15,6 +15,7 @@ from credagent.context import (
     ToolCallLedger,
     estimate_tokens,
 )
+from credagent.settings import get_settings
 
 
 def test_records_in_order_and_returns_an_immutable_snapshot() -> None:
@@ -124,7 +125,7 @@ def test_new_context_has_fresh_state_and_the_settings_budget() -> None:
     assert a.trace_id != b.trace_id
     assert len(a.trace_id) == 32 and int(a.trace_id, 16) >= 0
     assert a.ledger is not b.ledger and a.budget is not b.budget
-    assert a.budget.max_tokens == 8000  # BUDGET_MAX_TOKENS default (§ARCH 5)
+    assert a.budget.max_tokens == get_settings().budget_max_tokens  # from config/budget.json
     assert (len(a.ledger), a.budget.used_tokens, a.timings_ms) == (0, 0, {})
 
 

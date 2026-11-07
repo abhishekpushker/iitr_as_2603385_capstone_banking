@@ -167,13 +167,16 @@ class MockCrewLLM(BaseLLM):
         self._calls += 1
         tokens = estimate_tokens("".join(content for _, content in msgs))
         if self._ctx.budget.charge(self._persona, tokens):
-            return self._refuse("budget_exceeded")
-        if self._calls > MAX_STEPS:
-            return self._refuse("agent_error")
-        try:
-            return self._step(msgs)
-        except _ProtocolError:
-            return self._refuse("agent_error")
+            out = self._refuse("budget_exceeded")
+        elif self._calls > MAX_STEPS:
+            out = self._refuse("agent_error")
+        else:
+            try:
+                out = self._step(msgs)
+            except _ProtocolError:
+                out = self._refuse("agent_error")
+        self._ctx.budget.record_completion(self._persona, estimate_tokens(out))
+        return out
 
     # ------------------------------------------------------------------ protocol
     def _refuse(self, reason: RefusalReason) -> str:

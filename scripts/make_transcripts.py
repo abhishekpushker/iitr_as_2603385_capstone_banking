@@ -26,7 +26,8 @@ from pydantic import ValidationError
 import dataset
 from credagent import text
 from credagent.cache.response_cache import ResponseCache, normalize_query
-from credagent.context import RequestContext, ToolCallLedger
+from credagent.context import RequestContext, ToolCallLedger, estimate_tokens
+from credagent.crew.agents import make_agent
 from credagent.crew.factory import (
     CrewDeps,
     SchemaViolation,
@@ -34,6 +35,8 @@ from credagent.crew.factory import (
     parse_crew_output,
     run_crew,
 )
+from credagent.governance.budget import BudgetPolicy
+from credagent.governance.policy import AGENT_ROLES, TOOL_ACL
 from credagent.guardrails.groundedness import RetrievalTrace
 from credagent.guardrails.injection import BLOCK_SCORE as INJECTION_BLOCK_SCORE
 from credagent.guardrails.injection import RULES as INJECTION_RULES
@@ -52,7 +55,7 @@ from credagent.llm.engine import CLARIFY_ANSWER, REFUSAL_ANSWERS, MockEngine, fo
 from credagent.memory.session import SessionStore
 from credagent.observability.metrics import Metrics
 from credagent.pipeline.factory import build_orchestrator
-from credagent.pipeline.orchestrator import AutogenReview, ReviewStage, TurnRecord
+from credagent.pipeline.orchestrator import AutogenReview, BudgetExceeded, ReviewStage, TurnRecord
 from credagent.rag import calibration as cal
 from credagent.rag import evaluation as ev
 from credagent.rag.embedder import get_embedder
@@ -72,7 +75,7 @@ from credagent.schemas import (
 )
 from credagent.settings import Settings, get_settings
 from credagent.tools import escalation as esc
-from credagent.tools.acl import audit_crew
+from credagent.tools.acl import LeastAutonomyViolation, audit_crew
 from credagent.tools.lookup_tool import LoanStatusTool
 from scripts import validate_dataset
 from scripts.indexer import CollectionNames
@@ -1550,6 +1553,7 @@ PII_PIPELINE_QUERY = (
     "My PAN is {pan}, Aadhaar {aadhaar} and my a/c no. {account}. Which documents are required "
     "for KYC?"
 )
+PII_PIPELINE_VALUES = ("ABCPE1234F", "2345 6789 0123", "123456789012")  # pan, aadhaar, account
 
 
 def _shape(value: str) -> str:
@@ -1589,7 +1593,7 @@ def guardrail_pii(t: Transcript) -> None:
     t.table(["input", "masked text", "total"], [[n, m.text, m.total] for n, m in negatives])
 
     t.section("Through the pipeline (stage 1 runs before everything else)")
-    pan, aadhaar, account = "ABCPE1234F", "2345 6789 0123", "123456789012"
+    pan, aadhaar, account = PII_PIPELINE_VALUES
     raw = PII_PIPELINE_QUERY.format(pan=pan, aadhaar=aadhaar, account=account)
     p = Pipeline(t.settings)
     r = p.ask(raw, "transcript-13-pii", "transcript-13-pii")
@@ -1992,6 +1996,233 @@ def review_revise(t: Transcript) -> None:
             and REVIEW_CLAIM not in r.answer)  # fmt: skip
 
 
+# ------------------------------------------------------------------ 22: least autonomy
+LEAST_AUTONOMY = (
+    "Only the Lookup Agent may hold `check_loan_application_status`, and three independent "
+    "guards enforce it. The policy table `TOOL_ACL` (`governance/policy.py`) lists the only "
+    "agents allowed each tool; anything not listed is denied. At wiring time "
+    "`crew/agents.py::make_agent` checks every tool against it, and the lookup tool is bound to "
+    '`owner="lookup_agent"` and re-checks that owner on every `_run`, so a tampered instance '
+    "refuses to run. After every `build_crew`, `audit_crew` walks every agent **and every task's "
+    "`tools` override** and fails the request if a non-owner holds the tool. Every agent has "
+    "`allow_delegation=False`, which closes the indirect path (asking the Lookup Agent to act "
+    "for another agent), and the API has no endpoint that calls the lookup directly: the only "
+    "path to a record is a question answered by the crew's Lookup Agent."
+)
+
+
+def _violation(action: Callable[[], object]) -> str | None:
+    try:
+        action()
+    except LeastAutonomyViolation as exc:
+        return f"LeastAutonomyViolation: {exc}"
+    return None
+
+
+def least_autonomy(t: Transcript) -> None:
+    s = t.settings
+    t.section("The guard")
+    t.para(LEAST_AUTONOMY)
+    t.table(["tool", "allowed agents"],
+            [[f"`{tool}`", ", ".join(f"`{a}`" for a in sorted(agents))]
+             for tool, agents in TOOL_ACL.items()])  # fmt: skip
+
+    t.section("(a) The normal crew passes the audit")
+    ctx = RequestContext.new(session_id="transcript-22", trace_id="transcript-22")
+    crew = build_crew(ctx, CREW_MIXED_QUERY, _crew_deps(s))
+    tool_map = audit_crew(crew)
+    agents: list[Any] = list(crew.agents)  # CrewAI types them as `BaseAgent`
+    t.table(
+        ["agent (role)", "agent key", "tools", "allow_delegation", "cache", "max_iter"],
+        [[a.role, AGENT_ROLES[a.role], ", ".join(f"`{x.name}`" for x in a.tools) or "—",
+          a.allow_delegation, a.cache, a.max_iter] for a in agents],
+    )  # fmt: skip
+    t.table(["task", "agent", "tools override"],
+            [[i, task.agent.role if task.agent else "—",
+              ", ".join(f"`{x.name}`" for x in task.tools or ()) or "—"]
+             for i, task in enumerate(crew.tasks, start=1)])  # fmt: skip
+    t.para(f"`audit_crew(crew)` → `{json.dumps(tool_map)}`")
+
+    config = esc.load_escalation_config(s.escalation_config_path)
+    lookup_tool = LoanStatusTool(owner="lookup_agent", ledger=ToolCallLedger(), config=config)
+    composer_llm = agents[2].llm
+
+    t.section("(b) Wiring the lookup tool onto the Composer is refused")
+    wiring = _violation(lambda: make_agent("composer_agent", [lookup_tool], llm=composer_llm))
+    t.code(f'make_agent("composer_agent", [LoanStatusTool(owner="lookup_agent", …)])\n→ {wiring}')
+
+    t.section("(c) A tool smuggled onto the Composer after construction is caught by the audit")
+    agents[2].tools.append(lookup_tool)
+    smuggled = _violation(lambda: audit_crew(crew))
+    t.code(f"crew.agents[2].tools.append(lookup_tool); audit_crew(crew)\n→ {smuggled}")
+
+    t.section("(d) A tool whose owner was tampered with refuses to run")
+    ledger = ToolCallLedger()
+    tampered = LoanStatusTool(owner="lookup_agent", ledger=ledger, config=config)
+    tampered.owner = "composer_agent"
+    ran = _violation(lambda: tampered._run("LA-0007"))
+    t.code(f'tool.owner = "composer_agent"; tool._run("LA-0007")\n→ {ran}')
+
+    t.check("(a) the audit passes and only `lookup_agent` holds the lookup tool",
+            [k for k, tools in tool_map.items() if "check_loan_application_status" in tools]
+            == ["lookup_agent"])  # fmt: skip
+    t.check("(a) every agent has `allow_delegation=False`",
+            all(a.allow_delegation is False for a in agents))  # fmt: skip
+    t.check("(b) `make_agent` raises `LeastAutonomyViolation` naming the Composer",
+            wiring is not None and "composer_agent" in wiring)  # fmt: skip
+    t.check("(c) `audit_crew` raises `LeastAutonomyViolation` naming the Composer",
+            smuggled is not None and "composer_agent" in smuggled)  # fmt: skip
+    t.check("(d) `_run` raises `LeastAutonomyViolation` and records no tool call",
+            ran is not None and ledger.entries() == ())  # fmt: skip
+
+
+# ------------------------------------------------------------------ 23: budget cap
+BUDGET_OVERSIZED = (CREW_POLICY_QUERY + " ") * 200  # ≈ 12,000 chars (§ARCH 7.14.3)
+BUDGET_FORCED_LIMIT = 200
+
+
+def _budget_failure(orch: Any, text: str, session: str) -> BudgetExceeded | None:
+    async def run() -> None:
+        await orch.handle(text, session, "script", trace_id=session)
+
+    try:
+        anyio.run(run)
+    except BudgetExceeded as exc:
+        return exc
+    return None
+
+
+def budget_cap(t: Transcript) -> None:
+    from scripts import measure_budget  # noqa: PLC0415  (measure_budget imports this module)
+
+    s = t.settings
+    committed = json.loads(s.budget_config_path.read_text(encoding="utf-8"))
+    m = committed["measured"]
+    policy = BudgetPolicy()
+    t.section("Measured constants (`config/budget.json`, generated by `make budget`)")
+    t.para(
+        "`scripts/measure_budget.py` runs every eval and demo query in the repository through the "
+        "real pipeline (crew + Autogen review) with an unlimited meter and no preflight, and "
+        "reads the meter's per-call log (prompt tokens charged, completion tokens reported). "
+        f"Rule: {committed['rule']}."
+    )
+    t.table(["constant", "value"], [
+        ["requests measured / LLM calls", f"{m['requests']} / {m['llm_calls']}"],
+        ["max prompt tokens excluding user input", m["max_prompt_overhead_tokens"]],
+        ["`PROMPT_OVERHEAD_TOKENS` (next 100)", committed["prompt_overhead_tokens"]],
+        ["`MAX_OUTPUT_TOKENS` (max completion)", committed["max_output_tokens"]],
+        ["`N_LLM_CALLS`", committed["n_llm_calls"]],
+        ["max actual tokens per request", m["max_actual_total_tokens"]],
+        ["max preflight projection (normal query)", m["max_normal_projection_tokens"]],
+        ["`BUDGET_MAX_TOKENS`", committed["budget_max_tokens"]],
+        ["`PRICE_PER_1K_TOKENS_USD`", committed["price_per_1k_tokens_usd"]],
+        ["`BUDGET_MAX_COST_USD`", committed["budget_max_cost_usd"]],
+    ])  # fmt: skip
+    budget = committed["budget_max_tokens"]
+    floor = max(Fraction(2 * m["max_actual_total_tokens"]),
+                Fraction(6, 5) * m["max_normal_projection_tokens"])  # fmt: skip
+    expected_budget = math.ceil(floor / 1000) * 1000
+
+    t.section("Normal queries: usage against the budget")
+    masker = PiiMasker()
+    texts = {(label if len(qs) == 1 else f"{label}-t{i}"): q
+             for label, qs in measure_budget.conversations()
+             for i, q in enumerate(qs, start=1)}  # fmt: skip
+    rows = committed["queries"]
+    t.table(
+        ["source", "query (masked)", "input tokens", "LLM calls", "actual tokens", "of budget",
+         "projected", "preflight"],
+        [[r["source"], _clip(masker.mask(texts[r["source"]]).text, 70), r["input_tokens"],
+          r["llm_calls"], r["actual_tokens"], f"{r['actual_tokens'] / budget:.0%}",
+          r["projected_tokens"], "pass" if r["projected_tokens"] <= budget else "REJECT"]
+         for r in rows],
+    )  # fmt: skip
+
+    t.section("Order of limits (P10)")
+    smallest = policy.smallest_rejected_length()
+    t.table(["limit", "value"], [
+        ["request body cap (`MAX_BODY_BYTES`)", f"{s.max_body_bytes:,} bytes"],
+        ["Pydantic max length (`MAX_MESSAGE_CHARS`) × 4 UTF-8 bytes",
+         f"{s.max_message_chars:,} chars × 4 = {s.max_message_chars * 4:,} bytes"],
+        ["smallest input the budget rejects", f"{smallest:,} chars"],
+    ])  # fmt: skip
+
+    t.section("An oversized request is rejected at preflight")
+    store, sink = SessionStore.from_settings(), CollectingSink()
+    orch = build_orchestrator(s, store=store, sink=sink)
+    oversized = _budget_failure(orch, BUDGET_OVERSIZED, "transcript-23-oversized")
+    rejected = sink.records[-1]
+    t.para(
+        f"Input: the policy question repeated 200 times, {len(BUDGET_OVERSIZED):,} chars "
+        f"({estimate_tokens(BUDGET_OVERSIZED):,} input tokens), under `MAX_MESSAGE_CHARS`."
+    )
+    body = None if oversized is None else {
+        "error_code": oversized.error_code, "projected_tokens": oversized.projected_tokens,
+        "budget_tokens": oversized.budget_tokens, "trace_id": rejected.trace_id,
+    }  # fmt: skip
+    t.table(["field", "value"], [
+        ["exception", "—" if oversized is None else f"`BudgetExceeded` at `{oversized.stage}`"],
+        ["projected tokens", "—" if oversized is None else f"{oversized.projected_tokens:,}"],
+        ["LLM calls made", len(rejected.llm_usage)],
+        ["tool calls made", len(rejected.tools_invoked)],
+        ["outcome / error code", f"`{rejected.outcome}` / `{rejected.error_code}`"],
+        ["history length after", store.history_length("transcript-23-oversized")],
+    ])  # fmt: skip
+    t.para("The HTTP layer (Phase 10) maps this to 413 with the body:")
+    t.code(json.dumps(body, indent=2), "json")
+
+    t.section("A runtime overrun is caught after kickoff")
+    forced = BudgetPolicy(prompt_overhead_tokens=0, max_output_tokens=0,
+                          max_tokens=BUDGET_FORCED_LIMIT)  # fmt: skip
+    store2, sink2 = SessionStore.from_settings(), CollectingSink()
+    orch2 = build_orchestrator(s, store=store2, sink=sink2, preflight=forced,
+                               max_tokens=BUDGET_FORCED_LIMIT)  # fmt: skip
+    pre = forced.preflight(CREW_POLICY_QUERY)
+    overrun = _budget_failure(orch2, CREW_POLICY_QUERY, "transcript-23-overrun")
+    over = sink2.records[-1]
+    t.para(
+        f"Forced: the policy's constants are zeroed and the budget is {BUDGET_FORCED_LIMIT} "
+        f'tokens, so preflight passes "{CREW_POLICY_QUERY}" ({pre.projected_tokens} projected) '
+        "while the first real prompt crosses the meter's limit. `MockCrewLLM` never raises: it "
+        "sets the meter's flag and returns a `budget_exceeded` refusal, and the orchestrator "
+        "raises after kickoff."
+    )
+    t.table(["field", "value"], [
+        ["exception", "—" if overrun is None else f"`BudgetExceeded` at `{overrun.stage}`"],
+        ["tokens charged / limit", f"{over.tokens_estimated} / {BUDGET_FORCED_LIMIT}"],
+        ["LLM calls made", len(over.llm_usage)],
+        ["outcome / error code", f"`{over.outcome}` / `{over.error_code}`"],
+        ["history length after", store2.history_length("transcript-23-overrun")],
+    ])  # fmt: skip
+
+    t.check("settings read the measured constants from `config/budget.json`",
+            (s.prompt_overhead_tokens, s.max_output_tokens, s.budget_max_tokens,
+             s.budget_max_cost_usd)
+            == (committed["prompt_overhead_tokens"], committed["max_output_tokens"], budget,
+                committed["budget_max_cost_usd"]))  # fmt: skip
+    t.check("`BUDGET_MAX_TOKENS` = ceil1000(max(2 × max actual, 1.2 × max projection)) and the "
+            "cost cap = budget × price / 1k",
+            budget == expected_budget and committed["budget_max_cost_usd"]
+            == round(budget / 1000 * committed["price_per_1k_tokens_usd"], 8))  # fmt: skip
+    t.check("every normal query passes preflight and uses ≤ 50 % of the budget",
+            all(r["projected_tokens"] <= budget and 2 * r["actual_tokens"] <= budget
+                for r in rows))  # fmt: skip
+    t.check(
+        "body cap > MAX_MESSAGE_CHARS × 4 > smallest rejected length",
+        s.max_body_bytes > s.max_message_chars * 4 and s.max_message_chars > smallest,
+    )
+    t.check("the oversized request is under MAX_MESSAGE_CHARS and rejected at preflight",
+            len(BUDGET_OVERSIZED) < s.max_message_chars and oversized is not None
+            and oversized.stage == "preflight")  # fmt: skip
+    t.check("the oversized request made 0 LLM calls and 0 tool calls, and stored nothing",
+            rejected.llm_usage == () and rejected.tools_invoked == ()
+            and store.history_length("transcript-23-oversized") == 0)  # fmt: skip
+    t.check("the runtime overrun raised `BudgetExceeded` at `runtime`, after LLM calls, without "
+            "a crash or a memory append",
+            overrun is not None and overrun.stage == "runtime" and len(over.llm_usage) >= 1
+            and store2.history_length("transcript-23-overrun") == 0)  # fmt: skip
+
+
 GENERATORS: dict[str, tuple[str, Generator]] = {
     "01_dataset_report": ("Dataset report (Task 1)", dataset_report),
     "02_kb_inventory": ("Knowledge-base inventory (Task 2)", kb_inventory),
@@ -2024,6 +2255,10 @@ GENERATORS: dict[str, tuple[str, Generator]] = {
                           review_approve),
     "21_review_revise": ("Autogen review: an injected claim is removed (Task 14)",
                          review_revise),
+    "22_least_autonomy": ("Governance: least autonomy — only the Lookup Agent holds the lookup "
+                          "tool (Task 15)", least_autonomy),
+    "23_budget_cap": ("Governance: runtime budget cap — measured, preflight, overrun (Task 15)",
+                      budget_cap),
 }  # fmt: skip
 
 

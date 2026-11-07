@@ -22,6 +22,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 import dataset
 from credagent.context import RequestContext
 from credagent.crew.factory import SchemaViolation
+from credagent.governance.budget import BudgetPolicy
 from credagent.guardrails.groundedness import GroundednessGuard, RetrievalTrace
 from credagent.guardrails.injection import InjectionDetector, InjectionResult
 from credagent.guardrails.pii import MaskResult, PiiMasker
@@ -31,7 +32,6 @@ from credagent.pipeline.orchestrator import (
     AutogenReview,
     BudgetExceeded,
     Orchestrator,
-    PassThroughPreflight,
     PipelineTimeout,
     PreflightResult,
     TurnRecord,
@@ -46,6 +46,7 @@ from credagent.schemas import (
     ReviewVerdict,
     SourceRef,
 )
+from credagent.settings import get_settings
 from credagent.text import find_record_id
 from credagent.tools.lookup_tool import check_loan_application_status
 
@@ -181,7 +182,7 @@ def spies(spy: Spy) -> dict[str, Any]:
             spy.saw("injection", text)
             return super().detect(text)
 
-    class SpyPreflight(PassThroughPreflight):
+    class SpyPreflight(BudgetPolicy):
         def preflight(self, masked_text: str) -> PreflightResult:
             spy.saw("budget", masked_text)
             return super().preflight(masked_text)
@@ -220,7 +221,7 @@ def spies(spy: Spy) -> dict[str, Any]:
 
     return {
         "masker": SpyMasker(), "detector": SpyDetector(),
-        "preflight": SpyPreflight(budget_tokens=8000), "engine": SpyEngine(),
+        "preflight": SpyPreflight(), "engine": SpyEngine(),
         "review": SpyReview(), "guard": SpyGuard(), "store": SpyStore(),
         "sink": ListSink(spy.order),
     }  # fmt: skip
@@ -287,7 +288,7 @@ async def test_a_status_question_is_answered_with_the_ledger_and_usage() -> None
         ("lookup_agent", "check_loan_application_status")
     ]
     assert r.review == ReviewVerdict(approved=True, final_answer=r.answer, reason=r.review.reason)
-    assert r.usage.budget_tokens == 8000 and r.cache_hit is False
+    assert r.usage.budget_tokens == get_settings().budget_max_tokens and r.cache_hit is False
     record = sink.records[0]
     assert (record.outcome, record.transport, record.intent, record.trace_id) == (
         "answered", "ws", "status", r.trace_id,
@@ -473,11 +474,11 @@ async def test_budget_overrun_during_review_is_caught_by_the_postcheck() -> None
 
 @pytest.mark.anyio
 async def test_preflight_rejection_makes_no_crew_call() -> None:
-    class Reject(PassThroughPreflight):
+    class Reject(BudgetPolicy):
         def preflight(self, masked_text: str) -> PreflightResult:
             return PreflightResult(exceeds=True, projected_tokens=99999, budget_tokens=8000)
 
-    orch, crew, sink, store = make(preflight=Reject(budget_tokens=8000))
+    orch, crew, sink, store = make(preflight=Reject())
     with pytest.raises(BudgetExceeded) as info:
         await orch.handle(T1, "s1")
     assert (info.value.stage, info.value.projected_tokens, info.value.budget_tokens) == (
@@ -509,8 +510,3 @@ async def test_an_unexpected_error_is_logged_as_internal_and_re_raised() -> None
         await orch.handle(T1, "s1")
     assert (sink.records[0].outcome, sink.records[0].error_code) == ("error", "INTERNAL_ERROR")
     assert "total" in sink.records[0].timings_ms
-
-
-def test_pass_through_preflight_estimates_tokens_and_never_rejects() -> None:
-    result = PassThroughPreflight(budget_tokens=8000).preflight("x" * 40_000)
-    assert result == PreflightResult(exceeds=False, projected_tokens=10_000, budget_tokens=8000)

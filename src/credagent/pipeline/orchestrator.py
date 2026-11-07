@@ -5,7 +5,8 @@ from the API (Phase 10) to the agent. Every stage records its duration in `ctx.t
  0  RequestContext (trace id, budget meter, ledger, timings) + TurnRecord
  1  mask        PiiMasker.mask(raw_text); the raw text is dropped here
  2  injection   InjectionDetector.detect(masked) → blocked: injection_detected refusal, not stored
- 3  budget      BudgetPreflight.preflight(masked) → BudgetExceeded("preflight"), no crew call
+ 3  budget      BudgetPolicy.preflight(masked) (§ARCH 7.14.3) → BudgetExceeded("preflight"),
+                no LLM call
  ── ConversationMemory.run_turn: RunnableWithMessageHistory, under the session's asyncio.Lock ──
  4  memory      MockEngine.resolve_followup(masked, history) → standalone query, or a
                 clarification when it refers to something history cannot resolve (no crew)
@@ -23,8 +24,8 @@ from the API (Phase 10) to the agent. Every stage records its duration in `ctx.t
 12  log         RequestSink.emit(TurnRecord) in `finally`, exactly once, masked fields only
 ```
 
-Stage 3's real policy (`governance.budget.BudgetPolicy`) arrives in Phase 9 behind
-`BudgetPreflight`; stage 12's JSON-lines logger arrives in Phase 10 behind `RequestSink`.
+Stage 3 is `governance.budget.BudgetPolicy` behind `BudgetPreflight`; stage 12's JSON-lines
+logger arrives in Phase 10 behind `RequestSink`.
 Errors propagate as typed exceptions (`PipelineTimeout`, `BudgetExceeded`, `SchemaViolation`)
 for the API to map to 504 / 413 / 500, after the record is emitted with its outcome and error
 code.
@@ -44,8 +45,9 @@ import anyio.to_thread
 from langchain_core.messages import AIMessage, BaseMessage
 from pydantic import ValidationError
 
-from credagent.context import RequestContext, estimate_tokens
+from credagent.context import CallUsage, RequestContext
 from credagent.crew.factory import SchemaViolation, parse_crew_output
+from credagent.governance.budget import BudgetPolicy, PreflightResult
 from credagent.guardrails.groundedness import (
     GroundednessGuard,
     GuardDecision,
@@ -101,28 +103,8 @@ class BudgetExceeded(PipelineError):
 
 
 # ------------------------------------------------------------------ pluggable stages
-@dataclass(frozen=True)
-class PreflightResult:
-    exceeds: bool
-    projected_tokens: int
-    budget_tokens: int
-
-
 class BudgetPreflight(Protocol):
     def preflight(self, masked_text: str) -> PreflightResult: ...
-
-
-class PassThroughPreflight:
-    """Stage 3 until Phase 9: reports the input's own token estimate and never rejects."""
-
-    def __init__(self, budget_tokens: int) -> None:
-        self.budget_tokens = budget_tokens
-
-    def preflight(self, masked_text: str) -> PreflightResult:
-        return PreflightResult(
-            exceeds=False, projected_tokens=estimate_tokens(masked_text),
-            budget_tokens=self.budget_tokens,
-        )  # fmt: skip
 
 
 class ReviewStage(Protocol):
@@ -183,6 +165,7 @@ class TurnRecord:
     cache_hit: bool = False
     tools_invoked: tuple[ToolCall, ...] = ()
     tokens_estimated: int = 0
+    llm_usage: tuple[CallUsage, ...] = ()  # one entry per mock-LLM call (the call counter)
     cost_estimated_usd: float = 0.0
     timings_ms: dict[str, float] = field(default_factory=dict)
     error_code: str | None = None
@@ -239,7 +222,9 @@ class Orchestrator:
         self._masker = PiiMasker() if masker is None else masker
         self._detector = InjectionDetector() if detector is None else detector
         self._max_tokens = s.budget_max_tokens if max_tokens is None else max_tokens
-        self._preflight = PassThroughPreflight(self._max_tokens) if preflight is None else preflight
+        self._preflight = (
+            BudgetPolicy(max_tokens=self._max_tokens) if preflight is None else preflight
+        )
         self._engine = MockEngine() if engine is None else engine
         self._review = AutogenReview() if review is None else review
         self._guard = GroundednessGuard(self._engine) if guard is None else guard
@@ -312,6 +297,7 @@ class Orchestrator:
             )
             record.cache_hit = any(e.cache_hit for e in entries)
             record.tokens_estimated = ctx.budget.used_tokens
+            record.llm_usage = ctx.budget.usage()
             record.cost_estimated_usd = self._cost(ctx.budget.used_tokens)
             record.timings_ms = dict(ctx.timings_ms)
             self._sink.emit(record)

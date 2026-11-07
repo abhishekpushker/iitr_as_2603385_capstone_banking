@@ -125,6 +125,7 @@ class MockAutogenClient(ChatCompletionClient):
         self._last = RequestUsage(
             prompt_tokens=prompt_tokens, completion_tokens=estimate_tokens(content)
         )
+        self._ctx.budget.record_completion(self._persona, self._last.completion_tokens)
         self._total = RequestUsage(
             prompt_tokens=self._total.prompt_tokens + self._last.prompt_tokens,
             completion_tokens=self._total.completion_tokens + self._last.completion_tokens,

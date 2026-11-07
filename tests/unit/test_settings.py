@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
-from credagent.settings import Settings, get_settings
+from credagent.settings import BUDGET_CONFIG_KEYS, Settings, get_settings
+
+MEASURED = json.loads((Path(__file__).resolve().parents[2] / "config" / "budget.json").read_text())
 
 ENV_KEYS = [
     "MOCK_LLM", "LLM_PROVIDER", "CREWAI_DISABLE_TELEMETRY", "OTEL_SDK_DISABLED",
@@ -19,7 +22,8 @@ ENV_KEYS = [
     "BUDGET_MAX_COST_USD", "PRICE_PER_1K_TOKENS_USD", "CACHE_MAX_ENTRIES", "CACHE_TTL_SECONDS",
     "REQUEST_TIMEOUT_S", "CREWAI_STORAGE_DIR", "WEB_CONCURRENCY", "GIT_SHA", "IMAGE_ID",
     "EMBED_BATCH_SIZE", "KB_DIR", "CHROMA_CONNECT_ATTEMPTS", "CHROMA_BACKOFF_CAP_S",
-    "COLLECTION_META", "ESCALATION_CONFIG_PATH",
+    "COLLECTION_META", "ESCALATION_CONFIG_PATH", "BUDGET_CONFIG_PATH", "PROMPT_OVERHEAD_TOKENS",
+    "MAX_OUTPUT_TOKENS", "MAX_BODY_BYTES",
 ]  # fmt: skip
 
 
@@ -59,9 +63,10 @@ DEFAULTS: dict[str, Any] = {
     "chunking_report_path": Path("/app/eval/results/chunking_pr.md"),
     "escalation_config_path": Path("/app/config/escalation.json"),
     "log_path": Path("/data/logs/requests.jsonl"),
-    "max_message_chars": 20000,
-    "budget_max_tokens": 8000,
-    "budget_max_cost_usd": 0.016,
+    "max_message_chars": 16000,
+    "max_body_bytes": 65536,
+    "budget_config_path": Path("/app/config/budget.json"),
+    **{k: MEASURED[k] for k in BUDGET_CONFIG_KEYS},  # generated, not the fallbacks
     "price_per_1k_tokens_usd": 0.002,
     "cache_max_entries": 512,
     "cache_ttl_seconds": 3600,

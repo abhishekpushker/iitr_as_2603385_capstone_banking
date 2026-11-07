@@ -14,7 +14,13 @@ from credagent.context import RequestContext
 from credagent.crew.factory import CrewDeps, build_crew, run_crew
 from credagent.memory.session import ConversationMemory, SessionStore
 from credagent.observability.metrics import Metrics
-from credagent.pipeline.orchestrator import CrewRunner, Orchestrator, RequestSink, ReviewStage
+from credagent.pipeline.orchestrator import (
+    BudgetPreflight,
+    CrewRunner,
+    Orchestrator,
+    RequestSink,
+    ReviewStage,
+)
 from credagent.rag.calibration import load_retrieval_config
 from credagent.rag.embedder import get_embedder
 from credagent.rag.retriever import Retriever, collections_from_settings
@@ -41,6 +47,8 @@ def build_orchestrator(
     review: ReviewStage | None = None,
     metrics: Metrics | None = None,
     timeout_s: float | None = None,
+    preflight: BudgetPreflight | None = None,
+    max_tokens: int | None = None,
 ) -> Orchestrator:
     s = get_settings() if settings is None else settings
     if client is None:
@@ -63,5 +71,5 @@ def build_orchestrator(
         crew_runner=crew_runner(deps),
         chunk_texts=functools.partial(vectors.documents, collection),
         memory=ConversationMemory(SessionStore.from_settings() if store is None else store),
-        sink=sink, review=review, timeout_s=timeout_s,
+        sink=sink, review=review, timeout_s=timeout_s, preflight=preflight, max_tokens=max_tokens,
     )  # fmt: skip

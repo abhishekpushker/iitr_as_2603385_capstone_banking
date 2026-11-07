@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal, Self
+from typing import Any, Final, Literal, Self
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -19,6 +20,11 @@ _EGRESS_OFF: dict[str, bool] = {
     "transformers_offline": True,
     "hf_hub_disable_telemetry": True,
 }
+
+
+BUDGET_CONFIG_KEYS: Final = (
+    "budget_max_tokens", "budget_max_cost_usd", "prompt_overhead_tokens", "max_output_tokens",
+)  # fmt: skip
 
 
 class Settings(BaseSettings):
@@ -57,9 +63,15 @@ class Settings(BaseSettings):
     admin_api_key: SecretStr = SecretStr("dev-admin-key-not-a-secret")
 
     log_path: Path = Path("/data/logs/requests.jsonl")
-    max_message_chars: int = Field(default=20000, ge=1)
-    budget_max_tokens: int = Field(default=8000, ge=1)  # calibrated in Phase 9
+    max_message_chars: int = Field(default=16000, ge=1)  # × 4 UTF-8 bytes < body cap (D-040)
+    max_body_bytes: int = Field(default=64 * 1024, ge=1)  # body cap > MAX_MESSAGE_CHARS × 4 (P10)
+    # The budget: measured by scripts/measure_budget.py into config/budget.json (Phase 9), which
+    # fills these four unless the environment sets them; the defaults apply only without the file.
+    budget_config_path: Path = Path("/app/config/budget.json")
+    budget_max_tokens: int = Field(default=8000, ge=1)
     budget_max_cost_usd: float = Field(default=0.016, gt=0)
+    prompt_overhead_tokens: int = Field(default=0, ge=0)
+    max_output_tokens: int = Field(default=0, ge=0)
     price_per_1k_tokens_usd: float = Field(default=0.002, gt=0)
     cache_max_entries: int = Field(default=512, ge=1)
     cache_ttl_seconds: int = Field(default=3600, ge=1)
@@ -73,6 +85,18 @@ class Settings(BaseSettings):
     # Provenance for transcript headers (§ARCH 7.19); passed in by `make transcripts`.
     git_sha: str = "unknown"
     image_id: str = "unknown"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _measured_budget(cls, data: Any) -> Any:
+        """Fill the budget fields from config/budget.json; an explicit value (env) wins."""
+        if not isinstance(data, dict):
+            return data
+        path = Path(data.get("budget_config_path", cls.model_fields["budget_config_path"].default))
+        if path.is_file():
+            measured = json.loads(path.read_text(encoding="utf-8"))
+            return {**{k: measured[k] for k in BUDGET_CONFIG_KEYS}, **data}
+        return data
 
     @model_validator(mode="after")
     def _enforce_runtime_invariants(self) -> Self:
