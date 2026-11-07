@@ -254,3 +254,15 @@ def test_inputs_that_contradict_the_intent_fail_closed(
 ) -> None:
     r = ENGINE.compose(retrieval, lookup, query=query, record_id=find_record_id(query))
     assert (r.refused, r.refusal_reason) == (True, "agent_error")
+
+
+def test_every_refusal_reason_has_an_answer() -> None:
+    from typing import get_args
+
+    from credagent.schemas import RefusalReason
+
+    assert set(REFUSAL_ANSWERS) == set(get_args(RefusalReason))
+    assert {"ungrounded", "injection_detected"} <= set(REFUSAL_ANSWERS)
+    assert REFUSAL_ANSWERS["ungrounded"] == (
+        "I can't answer that from the policy documents I have. Please contact support."
+    )  # §ARCH 7.12.3, verbatim

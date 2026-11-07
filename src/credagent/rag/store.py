@@ -135,6 +135,13 @@ class VectorStore:
             for rank, (cid, doc, meta, dist) in enumerate(rows, start=1)
         ]
 
+    def documents(self, name: str, ids: Sequence[str]) -> dict[str, str]:
+        """`chunk_id → text` for the ids that exist (unknown ids are left out)."""
+        if not ids:
+            return {}
+        got = self.collection(name).get(ids=list(ids), include=["documents"])
+        return dict(zip(got["ids"], got["documents"], strict=True))
+
     # ------------------------------------------------------------------ meta record
     def write_meta(self, name: str, values: Metadata) -> None:
         self.collection(name).upsert(

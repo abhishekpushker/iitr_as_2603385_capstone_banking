@@ -2,6 +2,9 @@
 
 * `clean`: NFKC + zero-width removal + whitespace collapse, case kept (KB loading).
 * `normalize`: `clean` + casefold (every comparison).
+* `strip_invisible`: zero-width and bidi-control characters removed, then NFKC; case, spacing and
+  line breaks kept (the guardrails start here, so a PAN split by U+200B or a delimiter hidden
+  behind U+202E is still seen).
 * `content_tokens`: normalised word/number tokens minus a fixed stopword list.
 * `extract_numbers`: canonical numbers (`₹1.5 lakh` → `150000`, `10,000` → `10000`, `2%`).
 * `split_sentences` / `sentence_spans`: rule-based splitter aware of `p.a.`, `e.g.`, `i.e.`,
@@ -17,7 +20,12 @@ import re
 import unicodedata
 from decimal import Decimal
 
-_ZERO_WIDTH = dict.fromkeys(map(ord, "\u200b‌‍⁠﻿­"))
+_ZERO_WIDTH_CHARS = "\u200b‌‍⁠﻿­"
+_ZERO_WIDTH = dict.fromkeys(map(ord, _ZERO_WIDTH_CHARS))
+# LRM, RLM, ALM and the embedding/override/isolate controls (U+202A–U+202E, U+2066–U+2069).
+_BIDI_CHARS = "\u200e\u200f\u061c\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
+INVISIBLE_CHARS = frozenset(_ZERO_WIDTH_CHARS + _BIDI_CHARS)
+_INVISIBLE = dict.fromkeys(map(ord, INVISIBLE_CHARS))
 _WS = re.compile(r"\s+")
 
 
@@ -29,6 +37,11 @@ def clean(text: str) -> str:
 def normalize(text: str) -> str:
     """`clean` + casefold. Idempotent."""
     return clean(clean(text).casefold())
+
+
+def strip_invisible(text: str) -> str:
+    """Remove zero-width and bidi-control characters, then NFKC. Idempotent."""
+    return unicodedata.normalize("NFKC", text.translate(_INVISIBLE))
 
 
 # ------------------------------------------------------------------ tokens

@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     cache_max_entries: int = Field(default=512, ge=1)
     cache_ttl_seconds: int = Field(default=3600, ge=1)
     request_timeout_s: float = Field(default=30.0, gt=0)
+    session_max: int = Field(default=1000, ge=1)  # §ARCH 7.10 LRU cap
+    session_ttl_s: float = Field(default=3600.0, gt=0)  # §ARCH 7.10 idle TTL
+    injection_corpus_path: Path = Path("/app/eval/injection_corpus.yaml")  # §ARCH 7.12.2
     crewai_storage_dir: Path = Path("/tmp/crewai")  # noqa: S108  (tmpfs under a read-only root)
     web_concurrency: str | None = None
 

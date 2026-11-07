@@ -181,3 +181,52 @@ def test_lookup_task_output_is_the_tool_output_plus_its_kind() -> None:
         LOOKUP_TASK_OUTPUT.validate_python({"found": False, "error": "not_found"})  # no kind
     with pytest.raises(ValidationError):
         LOOKUP_TASK_OUTPUT.validate_python({"kind": "lookup_result", "found": False, "error": "x"})
+
+
+# ------------------------------------------------------------------ Phase 7: the pipeline's answer
+def _ask(**over: Any) -> dict[str, Any]:
+    from credagent.llm.engine import MockEngine
+
+    refusal = MockEngine().refusal("ungrounded").model_dump(mode="json", exclude={"kind"})
+    base = {
+        "trace_id": "t1", "session_id": "s1", **refusal,
+        "review": {"approved": True, "final_answer": refusal["answer"], "reason": "ok"},
+        "tools_invoked": [{"agent": "retrieval_agent", "tool": "rag_lookup",
+                           "args": {"query": "q"}, "cache_hit": False}],
+        "cache_hit": False,
+        "usage": {"estimated_tokens": 10, "budget_tokens": 8000, "estimated_cost_usd": 0.00002},
+        "timings_ms": {"mask": 0.1},
+    }  # fmt: skip
+    return base | over
+
+
+def test_review_verdict_has_exactly_the_brief_fields() -> None:
+    from credagent.schemas import ReviewVerdict
+
+    assert set(ReviewVerdict.model_fields) == {"approved", "final_answer", "reason"}
+    with pytest.raises(ValidationError):
+        ReviewVerdict.model_validate({"approved": True, "final_answer": "a", "reason": "r", "x": 1})
+
+
+def test_ask_response_round_trips_and_mirrors_the_crew_response_fields() -> None:
+    from credagent.schemas import AskResponse
+
+    response = AskResponse.model_validate(_ask())
+    assert AskResponse.model_validate_json(response.model_dump_json()) == response
+    crew_fields = set(CrewResponse.model_fields) - {"kind"}
+    assert crew_fields <= set(AskResponse.model_fields)
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"refused": False},  # refused ⇔ refusal_reason, as in CrewResponse
+        {"review": None, "extra": 1},
+        {"usage": {"estimated_tokens": -1, "budget_tokens": 8000, "estimated_cost_usd": 0}},
+    ],
+)
+def test_ask_response_is_strict(over: dict[str, Any]) -> None:
+    from credagent.schemas import AskResponse
+
+    with pytest.raises(ValidationError):
+        AskResponse.model_validate(_ask(**over))

@@ -17,8 +17,8 @@ from credagent import text
         ("Hello World", "hello world"),
         ("STRASSE Straße", "strasse strasse"),  # casefold, not lower
         ("ｆｕｌｌ　ｗｉｄｔｈ", "full width"),  # NFKC folds full-width forms and spaces
-        ("zero\u200bwidth‌‍⁠﻿join", "zerowidthjoin"),
-        ("soft­hyphen", "softhyphen"),
+        ("zero\u200bwidth\u200c\u200d\u2060\ufeffjoin", "zerowidthjoin"),
+        ("soft\u00adhyphen", "softhyphen"),
         ("  many \n\t spaces  ", "many spaces"),
         ("₹10,000 at 10.5%", "₹10,000 at 10.5%"),
         ("", ""),
@@ -30,6 +30,18 @@ def test_normalize(raw: str, expected: str) -> None:
 
 def test_clean_keeps_case_but_applies_nfkc_and_strips_zero_width() -> None:
     assert text.clean("Ｐａｎ\u200b Card  No.") == "Pan Card No."
+
+
+def test_strip_invisible_applies_nfkc_and_drops_zero_width_and_bidi_but_keeps_layout() -> None:
+    raw = "ＡＢ\u200bC\u202eD\u2066E\u200f F\u061c\n  G\u00ad"
+    assert text.strip_invisible(raw) == "ABCDE F\n  G"
+
+
+@given(st.text())
+def test_strip_invisible_is_idempotent_and_leaves_no_invisible_character(s: str) -> None:
+    once = text.strip_invisible(s)
+    assert text.strip_invisible(once) == once
+    assert not set(once) & text.INVISIBLE_CHARS
 
 
 @given(st.text())

@@ -140,7 +140,10 @@ LOOKUP_TASK_OUTPUT: Final[TypeAdapter[LookupFound | LookupNotFound]] = TypeAdapt
 
 # ------------------------------------------------------------------ CrewResponse (§ARCH 7.11)
 Intent = Literal["policy", "status", "mixed", "clarify", "out_of_scope", "refused"]
-RefusalReason = Literal["budget_exceeded", "agent_error", "retrieval_unavailable"]
+# Phase 7: `ungrounded` (groundedness gate, §7.12.3) and `injection_detected` (stage 2).
+RefusalReason = Literal[
+    "budget_exceeded", "agent_error", "retrieval_unavailable", "ungrounded", "injection_detected"
+]
 _GROUNDED_WITHOUT_SOURCES: Final = frozenset({"status", "clarify"})
 
 
@@ -194,4 +197,66 @@ class CrewResponse(BaseModel):
             raise ValueError("an escalation requires an application")
         if self.grounded and not self.sources and self.intent not in _GROUNDED_WITHOUT_SOURCES:
             raise ValueError("grounded requires sources unless intent is 'status' or 'clarify'")
+        return self
+
+
+# ------------------------------------------------------------------ the pipeline's answer (Phase 7)
+# `Orchestrator.handle` returns `AskResponse` (§ARCH 6 step 11, 7.16). It lives here, not in
+# `api`, because the pipeline may not import the API layer; `api/models.py` re-exports it.
+
+
+class ReviewVerdict(BaseModel):
+    """Exactly the brief's fields (§ARCH 7.11). Phase 7's review stage is a pass-through."""
+
+    model_config = _MODEL
+
+    approved: bool
+    final_answer: str
+    reason: str
+
+
+class ToolCall(BaseModel):
+    """One `ToolCallLedger` entry as the client sees it (arguments are masked text)."""
+
+    model_config = _MODEL
+
+    agent: str
+    tool: str
+    args: dict[str, str]
+    cache_hit: bool
+
+
+class Usage(BaseModel):
+    model_config = _MODEL
+
+    estimated_tokens: int = Field(ge=0)
+    budget_tokens: int = Field(ge=1)
+    estimated_cost_usd: float = Field(ge=0)
+
+
+class AskResponse(BaseModel):
+    """`CrewResponse`'s answer fields (same consistency rules) plus the request's trace."""
+
+    model_config = _MODEL
+
+    trace_id: str
+    session_id: str
+    answer: str = Field(min_length=1, max_length=4000)
+    intent: Intent
+    grounded: bool
+    refused: bool
+    refusal_reason: RefusalReason | None
+    sources: tuple[SourceRef, ...]
+    application: ApplicationView | None
+    escalation: Escalation | None
+    review: ReviewVerdict | None  # None when no review ran (blocked input, clarification)
+    tools_invoked: tuple[ToolCall, ...]
+    cache_hit: bool
+    usage: Usage
+    timings_ms: dict[str, float]
+
+    @model_validator(mode="after")
+    def _consistent(self) -> Self:
+        fields = set(CrewResponse.model_fields) - {"kind"}
+        CrewResponse.model_validate({f: getattr(self, f) for f in fields})
         return self

@@ -24,19 +24,34 @@ Phase 6 (the Composer, §ARCH 7.8.1 step 5):
   fail closed as an `agent_error` refusal.
 * `refusal(reason)`: the schema-valid refusal for each `RefusalReason`.
 
+Phase 7 (memory, §ARCH 7.10):
+
+* `resolve_followup(query, history)`: a query without its own record id that refers back ("it"
+  after a preposition or auxiliary, "its", "this/that/my application", "that loan", "the same
+  one") is rewritten into a standalone query from the most recent record id and loan category in
+  the history's AI messages (`additional_kwargs`). A status-only question takes the record id
+  ("Has it been approved?" → "Has application LA-0007 been approved?"); any other question takes
+  the loan category ("eligibility criteria for it" → "… for a Home loan"). Nothing to resolve →
+  `clarify`. No side state: a fresh session has an empty history and so no state.
+
 Nothing here knows any query: behaviour comes only from the query tokens and the chunks (N7).
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final, get_args
+
+from langchain_core.messages import AIMessage, BaseMessage
+from pydantic import TypeAdapter
 
 from credagent.rag.retriever import NO_MATCH_SIMILARITY
 from credagent.rag.store import RetrievedChunk
 from credagent.schemas import (
     FALLBACK_ANSWER,
+    RECORD_ID_PATTERN,
     ApplicationView,
     CrewResponse,
     Escalation,
@@ -55,6 +70,7 @@ from credagent.text import (
     RECORD_ID_CANDIDATE,
     content_tokens,
     extract_numbers,
+    find_record_id,
     normalize,
     sentence_spans,
 )
@@ -95,6 +111,11 @@ REFUSAL_ANSWERS: Final[dict[RefusalReason, str]] = {
     ),
     "retrieval_unavailable": (
         "I can't reach the policy documents right now. Please try again shortly."
+    ),
+    "ungrounded": "I can't answer that from the policy documents I have. Please contact support.",
+    "injection_detected": (
+        "I can't help with that request. Please ask a question about Cred's loans or banking "
+        "policies."
     ),
 }
 
@@ -281,6 +302,32 @@ class MockEngine:
         ]
 
     # ------------------------------------------------------------------ Composer (Phase 6)
+    # ------------------------------------------------------------------ memory (Phase 7)
+    def is_status_only(self, query: str) -> bool:
+        """With record ids removed, every content token is a generic status word (D-032)."""
+        return all(t in STATUS_TERMS for t in content_tokens(RECORD_ID_CANDIDATE.sub(" ", query)))
+
+    def resolve_followup(self, query: str, history: Sequence[BaseMessage]) -> FollowUp:
+        """§ARCH 7.10. State is read only from `history` (AI messages' `additional_kwargs`), so a
+        fresh session has none. A query with its own record id is never rewritten."""
+        record_id = find_record_id(query)
+        refs = list(_REFERENCE.finditer(query))
+        if record_id is not None or not refs:
+            return FollowUp(query, record_id, mentioned_category(query), resolved=False,
+                            clarify=False)  # fmt: skip
+        last_id, last_category = _history_state(history)
+        if self.is_status_only(_REFERENCE.sub(" ", query)):
+            if last_id is None:
+                return FollowUp(query, None, None, resolved=False, clarify=True)
+            noun, rid, category = f"application {last_id}", last_id, last_category
+        elif last_category is not None:
+            noun, rid, category = _loan_phrase(last_category), None, last_category
+        elif last_id is not None:
+            noun, rid, category = f"application {last_id}", last_id, None
+        else:
+            return FollowUp(query, None, None, resolved=False, clarify=True)
+        return FollowUp(_rewrite(query, refs, noun), rid, category, resolved=True, clarify=False)
+
     def classify_intent(self, query: str, record_id: str | None) -> Intent:
         tokens = content_tokens(RECORD_ID_CANDIDATE.sub(" ", query))
         status_only = all(t in STATUS_TERMS for t in tokens)
@@ -372,3 +419,81 @@ def _application(app: LookupFound) -> tuple[ApplicationView, Escalation]:
             recommended=app.escalation_recommended,
         ),
     )  # fmt: skip
+
+
+# ------------------------------------------------------------------ follow-up resolution (Phase 7)
+# References to an earlier application or loan (§ARCH 7.10). "it" counts only after a
+# preposition or an auxiliary ("for it", "does it"); "is it" never does, because "is it possible
+# …" is far more often an expletive (D-036).
+_REFERENCE: Final = re.compile(
+    r"\b(?:(?P<poss>its)"
+    r"|(?P<noun>(?:this|that|my|the same) (?:application|loan)|the same one)"
+    r"|(?P<verb>for|on|about|of|with|to|from|does|did|do|will|would|can|could|has|have|had"
+    r"|should|was|were) it)\b",
+    re.IGNORECASE,
+)
+LOAN_CATEGORY: Final[TypeAdapter[LoanCategory]] = TypeAdapter(LoanCategory)
+_RECORD_ID: Final = re.compile(RECORD_ID_PATTERN)
+_CATEGORY_MENTION: Final = re.compile(
+    r"\b(" + "|".join(get_args(LoanCategory)) + r") loans?\b", re.IGNORECASE
+)
+
+
+@dataclass(frozen=True)
+class FollowUp:
+    """A standalone query: `record_id` is the id it carries, `category` the loan type it is
+    about (if any), `resolved` whether history rewrote it, `clarify` whether it refers to
+    something history cannot resolve."""
+
+    query: str
+    record_id: str | None
+    category: LoanCategory | None
+    resolved: bool
+    clarify: bool
+
+
+def mentioned_category(query: str) -> LoanCategory | None:
+    """The one loan category the query names as "<category> loan", or `None`."""
+    found = {m.group(1).capitalize() for m in _CATEGORY_MENTION.finditer(query)}
+    if len(found) != 1:
+        return None
+    (category,) = found
+    return LOAN_CATEGORY.validate_python(category)
+
+
+def _history_state(history: Sequence[BaseMessage]) -> tuple[str | None, LoanCategory | None]:
+    """The most recent valid record id and loan category in AI messages' `additional_kwargs`."""
+    record_id: str | None = None
+    category: LoanCategory | None = None
+    for message in reversed(history):
+        if not isinstance(message, AIMessage):
+            continue
+        kwargs = message.additional_kwargs
+        rid, cat = kwargs.get("record_id"), kwargs.get("category")
+        if record_id is None and isinstance(rid, str) and _RECORD_ID.fullmatch(rid):
+            record_id = rid
+        if category is None and cat in get_args(LoanCategory):
+            category = LOAN_CATEGORY.validate_python(cat)
+        if record_id is not None and category is not None:
+            break
+    return record_id, category
+
+
+def _loan_phrase(category: LoanCategory) -> str:
+    return f"{'an' if category[0] in 'AEIOU' else 'a'} {category} loan"
+
+
+def _rewrite(query: str, refs: Sequence[re.Match[str]], noun: str) -> str:
+    out, end = [], 0
+    for m in refs:
+        if m["poss"]:
+            replacement = f"{noun}'s"
+        elif m["verb"]:
+            replacement = f"{m['verb']} {noun}"
+        else:
+            replacement = noun
+        if m.start() == 0:
+            replacement = replacement[0].upper() + replacement[1:]
+        out += [query[end : m.start()], replacement]
+        end = m.end()
+    return "".join([*out, query[end:]])

@@ -171,3 +171,12 @@ def test_connect_gives_up_after_the_attempt_budget(monkeypatch: pytest.MonkeyPat
     with pytest.raises(ConnectionError, match="after 10 attempts"):
         connect_http("chroma", 8000, attempts=10, backoff_cap_s=5.0, sleep=sleeps.append)
     assert flaky.calls == 10 and len(sleeps) == 9
+
+
+def test_documents_returns_the_texts_of_known_ids_only(store: VectorStore) -> None:
+    """The groundedness gate reads the source chunks' texts back by id (§ARCH 7.12.3)."""
+    name = _name()
+    _fill(store, name)
+    got = store.documents(name, ["d2::s::000", "d1::s::000", "missing"])
+    assert got == {"d2::s::000": "text of d2::s::000", "d1::s::000": "text of d1::s::000"}
+    assert store.documents(name, []) == {}
