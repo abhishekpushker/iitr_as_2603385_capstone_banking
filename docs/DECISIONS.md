@@ -435,7 +435,7 @@ optional fixed `trace_id` so transcripts are reproducible. §4 (diagram, layout,
 `tests/unit/test_static_rules.py` gains `context` at rank 0 and a test that these classes are
 defined only in `context.py`.
 
-### D-032 Retrieval skips its tool for status-only questions (refines §ARCH 7.8.1 step 5; needs human sign-off)
+### D-032 Retrieval skips its tool for status-only questions (refines §ARCH 7.8.1 step 5; human-approved 2026-11-07)
 **Context:** §7.8.1 step 5 has the Retrieval persona always call `rag_lookup`. Then a pure status
 question ("What is the status of application LA-0007?") would also get whatever policy text
 retrieval finds, and nothing could tell `status` from `mixed`.
@@ -460,7 +460,7 @@ is unchanged. Reverting to "always retrieve" is a one-line change in `_retrieve`
   now (Phase 7 adds its own). Validators beyond §7.11: `refusal_reason` is set **exactly** when
   `refused`; `intent == "refused"` exactly when `refused`; a refusal is never grounded; an
   `escalation` needs an `application`. `sources` is a tuple (a JSON array).
-* **Unknown or malformed id:** answered as `intent="clarify"` ("I couldn't find a loan
+* **Unknown or malformed id** (human-approved 2026-11-07; §7.11 amended): answered as `intent="clarify"` ("I couldn't find a loan
   application with id LA-9999. Please check the id (format LA-0000)."), because §7.11 makes
   `status` require an application. `text.find_record_id` accepts `LA-` + 1–8 ASCII digits, any
   case, so a malformed id reaches the tool and comes back as `invalid_record_id`.
@@ -489,3 +489,24 @@ is unchanged. Reverting to "always retrieve" is a one-line change in `_retrieve`
   reviewer and editor run. Phase 9 calibrates the budget, so it must expect this.
 * **Transcripts** print floats rounded to 3 decimals (the risk register's float-drift
   mitigation); the checks use the unrounded values.
+
+## Phase 7 — pipeline, guardrails, memory (2026-11-07)
+
+### D-034 A Claude Code hook enforces "Docker only" for host Python
+**Context:** CLAUDE.md forbids `pip install` or running Python on the host; until now only the
+rule text enforced it.
+**Decision:** `.claude/settings.json` registers a `PreToolUse` hook on `Bash` that runs
+`.claude/hooks/deny-host-python.sh` (bash + `jq`, no Python). It drops heredoc bodies and
+quoted strings (data, not commands), splits the rest on `;`, `&&`, `||`, `|` and newlines, skips
+leading `VAR=value` assignments and `env`/`command`/`exec`/`sudo`/`time`/`nohup`, and rejects
+(exit 2, reason on stderr) a segment whose first word's basename matches `^(python|pip)[0-9.]*$`.
+`make …` and `docker compose run … python …` pass, because the first word is `make`/`docker`.
+**Verified once (2026-11-07):** 10 deny cases (`python3 -c 1`, `pip install x`, `pip3 list`,
+`python -V`, `/usr/bin/python3.12 x`, `cd src && python -m x`, `FOO=1 python x`,
+`env python x`, `ls | pip3 freeze`, `python f` after a heredoc) exit 2; 9 allow cases
+(`make gate-fast`, `docker compose run --rm tests python -m pytest`, `git log`, `echo python`,
+`grep pip README`, `pipx run x`, `ruff check`, a quoted `"a | python b"`, a heredoc whose body
+holds `python -V`) exit 0; a live `python3 --version` tool call was blocked by Claude Code. The
+first version also split heredoc bodies and blocked this very entry; fixed before commit.
+**Limits:** it guards Claude Code's Bash tool only, not a human's shell; `bash -c '…'` and `eval`
+are not parsed. A guard rail, not a sandbox.
