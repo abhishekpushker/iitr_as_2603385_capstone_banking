@@ -829,3 +829,13 @@ First measurement (code at phase-10-green + the harness), averages accuracy 0.86
 After (bless + full gate): accuracy 1.000, grounding 1.000, completeness 1.000, safety 1.000;
 none below 0.67. These are mock scores on a 15-item set written by the implementer; they show
 the harness and rubric work end to end, not production quality.
+
+## Phase 12 — hardening, documentation, final audit, release (2026-11-08)
+
+### D-050 Accuracy is 0 when an expected answer covers no gold fact (amends §ARCH 7.18; human-directed)
+The number rule gave an off-topic answer with no numbers accuracy 1.0. For
+`expected_behaviour = answer`, completeness 0 now forces accuracy 0: an answer that states no gold
+fact cannot be accurate. Changed in `eval/judge_prompt.md`, `MockJudgeClient` and the §ARCH 7.18
+rubric line; test `test_judge.py::test_off_topic_answer_without_numbers_scores_accuracy_0`.
+Re-measured with `make eval`: accuracy 1.000, grounding 1.000, completeness 1.000, safety 1.000
+(unchanged; no item had completeness 0, and `eval/results/` is byte-identical).

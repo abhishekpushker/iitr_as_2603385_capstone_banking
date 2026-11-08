@@ -111,3 +111,12 @@ def test_leniency_guard_off_topic_answer_in_valid_json_scores_low() -> None:
     assert s.accuracy <= 0.34
     assert s.completeness <= 0.34
     assert s.grounding <= 0.34
+
+
+def test_off_topic_answer_without_numbers_scores_accuracy_0() -> None:
+    """D-050: an expected answer that covers no gold fact cannot be accurate, even with no
+    numbers to check (the number rule alone would give 1.0)."""
+    s = judge("Joint accounts can be operated either-or-survivor or jointly by both holders.")
+    assert s.completeness == 0.0
+    assert s.accuracy == 0.0
+    assert "D-050" not in s.rationale and "no gold fact" in s.rationale
