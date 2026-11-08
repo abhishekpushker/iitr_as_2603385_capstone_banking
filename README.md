@@ -62,7 +62,9 @@ any other value. The only `.env` values are the development placeholders in `.en
 
 `dataset.py` (stdlib only) draws every record from a local `random.Random(SEED)`, in a fixed order
 per record: category, status, amount, `days_since_created = randint(0, 30)`, fraud flag
-(Bernoulli, p = 0.18).
+(Bernoulli, p = 0.18). Categories and statuses are the brief's vocabularies verbatim: `Personal Loan`,
+`Home Loan`, `Auto Loan`, `Education Loan`, `Business Loan`; `Submitted`, `Under Review`, `Approved`,
+`Rejected`, `Disbursed`.
 
 - **Seed:** `SEED = 2026`, `N_RECORDS = 60`.
 - **Seed history:** start at 2026 and increment until `validate` passes; records are never edited.
@@ -81,11 +83,11 @@ masking rule.
 <!-- source: transcripts/01_dataset_report.md -->
 | Category | Weight | Amount range |
 |---|---|---|
-| Personal | 0.3 | ₹50,000 – ₹40,00,000 |
-| Home | 0.2 | ₹10,00,000 – ₹2,00,00,000 |
-| Auto | 0.2 | ₹2,00,000 – ₹30,00,000 |
-| Education | 0.15 | ₹1,00,000 – ₹75,00,000 |
-| Business | 0.15 | ₹5,00,000 – ₹1,00,00,000 |
+| Personal Loan | 0.3 | ₹50,000 – ₹40,00,000 |
+| Home Loan | 0.2 | ₹10,00,000 – ₹2,00,00,000 |
+| Auto Loan | 0.2 | ₹2,00,000 – ₹30,00,000 |
+| Education Loan | 0.15 | ₹1,00,000 – ₹75,00,000 |
+| Business Loan | 0.15 | ₹5,00,000 – ₹1,00,00,000 |
 
 <!-- source: transcripts/01_dataset_report.md -->
 | Status | Weight |
@@ -101,18 +103,18 @@ masking rule.
 
 <!-- source: transcripts/01_dataset_report.md -->
 - **Records:** 60
-- **sha256:** `92fd6e6696e4437ed8fefe7b2333a9700dfd46ddfcf411f1744231724d39946e`
+- **sha256:** `01a4304ab66ae63c78b3d740e2c075e707c31823f68c0eb8e4be1db841caa55d`
 - **Flagged for fraud review:** 10 / 60 = 16.67%
 - **days_since_created:** min 0, max 30, mean 15.9
 
 <!-- source: transcripts/01_dataset_report.md -->
 | Category | Records | Min ₹ | Median ₹ | Max ₹ |
 |---|---|---|---|---|
-| Personal | 12 | ₹50,000 | ₹4,70,000 | ₹30,10,000 |
-| Home | 14 | ₹10,45,000 | ₹63,80,000 | ₹1,99,35,000 |
-| Auto | 19 | ₹2,70,000 | ₹8,10,000 | ₹26,65,000 |
-| Education | 6 | ₹1,15,000 | ₹5,75,000 | ₹56,55,000 |
-| Business | 9 | ₹6,30,000 | ₹17,30,000 | ₹62,35,000 |
+| Personal Loan | 12 | ₹50,000 | ₹4,70,000 | ₹30,10,000 |
+| Home Loan | 14 | ₹10,45,000 | ₹63,80,000 | ₹1,99,35,000 |
+| Auto Loan | 19 | ₹2,70,000 | ₹8,10,000 | ₹26,65,000 |
+| Education Loan | 6 | ₹1,15,000 | ₹5,75,000 | ₹56,55,000 |
+| Business Loan | 9 | ₹6,30,000 | ₹17,30,000 | ₹62,35,000 |
 
 <!-- source: transcripts/01_dataset_report.md -->
 | Status | Records |
@@ -173,41 +175,76 @@ measured top-1 similarity:
 
 **Deployed: `sentence`, threshold 0.567.** Top-1 doc was correct for 10/10 in-scope questions on
 both collections. One honest revision was needed (D-025): kb-04's sentences never said "KYC", so it
-was reworded with the same facts; the query sets were not changed. Grounded generation answers the
-5 in-scope demo questions from the KB and falls back on the out-of-scope one
-([transcript 05](transcripts/05_grounded_generation.md)).
+was reworded with the same facts; the query sets were not changed.
+
+**Grounded generation** ([transcript 05](transcripts/05_grounded_generation.md)) runs on ten
+in-scope questions, the same ten that Task 5 scores below (D-055), plus one out-of-scope question.
+Eight in-scope questions are answered verbatim from the retrieved KB sentences; the out-of-scope
+one gets "I don't know based on the available policy documents."
+
+**The cost of the threshold.** Two of the ten in-scope questions are declined too: "What is charged
+when my savings balance falls below the required average?" (top-1 0.523) and "What does an Under
+Review application status mean?" (0.515). Retrieval finds the right document for both, but their
+similarity is below 0.567. The threshold is kept where calibration put it, midway between the
+measured clusters, rather than lowered to rescue these two: a lower cut-off would move toward the
+out-of-scope cluster (max 0.4797), and for a lending assistant a refusal that sends the member to
+support costs less than an answer drawn from the wrong policy. The ten calibration questions were
+fixed before measuring and are not extended after the fact to move the line.
 
 ## Chunking evaluation: precision and recall (Task 5)
 
-Five in-scope questions with labelled relevant documents, top-3 chunks → `doc_id`s deduplicated
-in rank order ([transcript 06](transcripts/06_chunking_precision_recall.md),
-`eval/results/chunking_pr.md`).
+The ten questions of transcript 05, with relevant documents labelled before measuring; top-3
+chunks → `doc_id`s deduplicated in rank order
+([transcript 06](transcripts/06_chunking_precision_recall.md), `eval/results/chunking_pr.md`).
+
+**`kb_fixed_v1` (fixed):**
 
 <!-- source: eval/results/chunking_pr.md -->
 | # | query | relevant | retrieved (dedup, rank order) | precision | recall |
 |---|---|---|---|---|---|
-| 1 | Can an NRI be a joint account holder? | kb-11-joint-accounts, kb-12-nri-eligibility | kb-12-nri-eligibility, kb-11-joint-accounts | P = 2/2 = 1.000 | R = 2/2 = 1.000 |
-| 2 | What prepayment penalty applies and what rate slab applies to a personal loan? | kb-07-interest-rate-slabs, kb-08-prepayment-penalty | kb-08-prepayment-penalty | P = 1/1 = 1.000 | R = 1/2 = 0.500 |
-| 3 | What fee applies if I close my account in its first year? | kb-06-account-closure | kb-06-account-closure | P = 1/1 = 1.000 | R = 1/1 = 1.000 |
-| 4 | What is charged when my savings balance falls below the required average? | kb-09-minimum-balance | kb-09-minimum-balance, kb-07-interest-rate-slabs | P = 1/2 = 0.500 | R = 1/1 = 1.000 |
-| 5 | What does an Under Review application status mean? | kb-13-application-status-glossary | kb-13-application-status-glossary | P = 1/1 = 1.000 | R = 1/1 = 1.000 |
+| 1 | What is the annual fee on the credit card and when is it waived? | kb-03-credit-card-fees | kb-03-credit-card-fees, kb-06-account-closure | P = 1/2 = 0.500 | R = 1/1 = 1.000 |
+| 2 | Within how many days must I report an unauthorised transaction for zero liability? | kb-05-fraud-dispute | kb-05-fraud-dispute | P = 1/1 = 1.000 | R = 1/1 = 1.000 |
+| 3 | Can I close my account if I still have dues? | kb-06-account-closure | kb-06-account-closure | P = 1/1 = 1.000 | R = 1/1 = 1.000 |
+| 4 | What interest rate does a personal loan carry for a credit score above 800? | kb-07-interest-rate-slabs | kb-07-interest-rate-slabs, kb-01-loan-eligibility | P = 1/2 = 0.500 | R = 1/1 = 1.000 |
+| 5 | Is there a penalty for prepaying a home loan? | kb-08-prepayment-penalty | kb-08-prepayment-penalty | P = 1/1 = 1.000 | R = 1/1 = 1.000 |
+| 6 | Can an NRI be a joint account holder? | kb-11-joint-accounts, kb-12-nri-eligibility | kb-12-nri-eligibility, kb-11-joint-accounts | P = 2/2 = 1.000 | R = 2/2 = 1.000 |
+| 7 | What prepayment penalty applies and what rate slab applies to a personal loan? | kb-07-interest-rate-slabs, kb-08-prepayment-penalty | kb-08-prepayment-penalty | P = 1/1 = 1.000 | R = 1/2 = 0.500 |
+| 8 | What fee applies if I close my account in its first year? | kb-06-account-closure | kb-06-account-closure | P = 1/1 = 1.000 | R = 1/1 = 1.000 |
+| 9 | What is charged when my savings balance falls below the required average? | kb-09-minimum-balance | kb-09-minimum-balance, kb-07-interest-rate-slabs | P = 1/2 = 0.500 | R = 1/1 = 1.000 |
+| 10 | What does an Under Review application status mean? | kb-13-application-status-glossary | kb-13-application-status-glossary | P = 1/1 = 1.000 | R = 1/1 = 1.000 |
 
-That table is `kb_fixed_v1`. `kb_sentence_v1` retrieves the same documents, in a different order
-for query 1 only:
+<!-- source: eval/results/chunking_pr.md -->
+- `macro P = (0.500 + 1.000 + 1.000 + 0.500 + 1.000 + 1.000 + 1.000 + 1.000 + 0.500 + 1.000) / 10 = 0.850`
+- `macro R = (1.000 + 1.000 + 1.000 + 1.000 + 1.000 + 1.000 + 0.500 + 1.000 + 1.000 + 1.000) / 10 = 0.950`
+
+**`kb_sentence_v1` (sentence):**
 
 <!-- source: eval/results/chunking_pr.md -->
 | # | query | relevant | retrieved (dedup, rank order) | precision | recall |
 |---|---|---|---|---|---|
-| 1 | Can an NRI be a joint account holder? | kb-11-joint-accounts, kb-12-nri-eligibility | kb-11-joint-accounts, kb-12-nri-eligibility | P = 2/2 = 1.000 | R = 2/2 = 1.000 |
+| 1 | What is the annual fee on the credit card and when is it waived? | kb-03-credit-card-fees | kb-03-credit-card-fees, kb-06-account-closure | P = 1/2 = 0.500 | R = 1/1 = 1.000 |
+| 2 | Within how many days must I report an unauthorised transaction for zero liability? | kb-05-fraud-dispute | kb-05-fraud-dispute | P = 1/1 = 1.000 | R = 1/1 = 1.000 |
+| 3 | Can I close my account if I still have dues? | kb-06-account-closure | kb-06-account-closure | P = 1/1 = 1.000 | R = 1/1 = 1.000 |
+| 4 | What interest rate does a personal loan carry for a credit score above 800? | kb-07-interest-rate-slabs | kb-07-interest-rate-slabs, kb-01-loan-eligibility | P = 1/2 = 0.500 | R = 1/1 = 1.000 |
+| 5 | Is there a penalty for prepaying a home loan? | kb-08-prepayment-penalty | kb-08-prepayment-penalty | P = 1/1 = 1.000 | R = 1/1 = 1.000 |
+| 6 | Can an NRI be a joint account holder? | kb-11-joint-accounts, kb-12-nri-eligibility | kb-11-joint-accounts, kb-12-nri-eligibility | P = 2/2 = 1.000 | R = 2/2 = 1.000 |
+| 7 | What prepayment penalty applies and what rate slab applies to a personal loan? | kb-07-interest-rate-slabs, kb-08-prepayment-penalty | kb-08-prepayment-penalty | P = 1/1 = 1.000 | R = 1/2 = 0.500 |
+| 8 | What fee applies if I close my account in its first year? | kb-06-account-closure | kb-06-account-closure | P = 1/1 = 1.000 | R = 1/1 = 1.000 |
+| 9 | What is charged when my savings balance falls below the required average? | kb-09-minimum-balance | kb-09-minimum-balance, kb-07-interest-rate-slabs | P = 1/2 = 0.500 | R = 1/1 = 1.000 |
+| 10 | What does an Under Review application status mean? | kb-13-application-status-glossary | kb-13-application-status-glossary | P = 1/1 = 1.000 | R = 1/1 = 1.000 |
+
+<!-- source: eval/results/chunking_pr.md -->
+- `macro P = (0.500 + 1.000 + 1.000 + 0.500 + 1.000 + 1.000 + 1.000 + 1.000 + 0.500 + 1.000) / 10 = 0.850`
+- `macro R = (1.000 + 1.000 + 1.000 + 1.000 + 1.000 + 1.000 + 0.500 + 1.000 + 1.000 + 1.000) / 10 = 0.950`
 
 <!-- source: eval/results/chunking_pr.md -->
 | strategy | collection | macro P | macro R | macro F1 | mean top-1 sim | mean docs retrieved |
 |---|---|---|---|---|---|---|
-| `fixed` | `kb_fixed_v1` | 0.900 | 0.900 | 0.900 | 0.655 | 1.400 |
-| `sentence` | `kb_sentence_v1` | 0.900 | 0.900 | 0.900 | 0.654 | 1.400 |
+| `fixed` | `kb_fixed_v1` | 0.850 | 0.950 | 0.897 | 0.708 | 1.400 |
+| `sentence` | `kb_sentence_v1` | 0.850 | 0.950 | 0.897 | 0.685 | 1.400 |
 
-**Recommendation.** Deploy `sentence` chunking. On these five questions both strategies reach
-macro precision 0.900 and macro recall 0.900, so P/R alone does not separate them. The calibration
+**Recommendation.** Deploy `sentence` chunking. On these ten questions both strategies reach
+macro precision 0.850 and macro recall 0.950, so P/R alone does not separate them. The calibration
 does: `fixed` has a gap of only 0.033 between in-scope and out-of-scope similarities, below the
 0.05 minimum, so no threshold on it reliably separates answerable from unanswerable questions.
 `sentence` has a gap of 0.175, so its threshold of 0.567 is safe to apply at runtime (D-028).
@@ -242,9 +279,11 @@ Three CrewAI agents run through `Crew.kickoff()`: the Policy Retrieval Specialis
 `rag_lookup`), the Loan Application Lookup Specialist (holds `check_loan_application_status`) and
 the Response Composer (no tools). A policy question uses only the RAG tool
 ([transcript 08](transcripts/08_crew_rag_query.md)); a status question uses only the lookup tool
-([transcript 09](transcripts/09_crew_lookup_query.md)). Session memory carries a record id across
-turns ([transcript 10](transcripts/10_memory_multiturn.md)); a fresh session has none and asks for
-an id ([transcript 11](transcripts/11_memory_fresh_session.md)). Every crew response is validated
+([transcript 09](transcripts/09_crew_lookup_query.md)). Session memory carries the application across
+turns ([transcript 10](transcripts/10_memory_multiturn.md)): LA-0037 is a Home Loan, so "What credit score
+does it need?" becomes "What credit score does a Home loan need?" and is answered with the Home-loan
+rule, and "And does it carry a prepayment penalty?" with the floating-rate home-loan rule. A fresh
+session has no history and asks for an id ([transcript 11](transcripts/11_memory_fresh_session.md)). Every crew response is validated
 against the `CrewResponse` Pydantic schema, raw JSON and parsed object alike
 ([transcript 12](transcripts/12_structured_output.md)).
 
@@ -286,15 +325,15 @@ constants are measured from real rendered prompts over every eval and demo query
 | constant | value |
 |---|---|
 | `PROMPT_OVERHEAD_TOKENS` | 1700 |
-| `MAX_OUTPUT_TOKENS` | 298 |
+| `MAX_OUTPUT_TOKENS` | 241 |
 | `N_LLM_CALLS` | 7 |
-| `BUDGET_MAX_TOKENS` | 18000 |
+| `BUDGET_MAX_TOKENS` | 17000 |
 | `PRICE_PER_1K_TOKENS_USD` | 0.002 |
-| `BUDGET_MAX_COST_USD` | 0.036 |
+| `BUDGET_MAX_COST_USD` | 0.034 |
 | requests measured | 37 |
 | LLM calls measured | 210 |
-| max actual tokens per request | 5624 |
-| max preflight projection (normal query) | 14217 |
+| max actual tokens per request | 5269 |
+| max preflight projection (normal query) | 13818 |
 
 An oversized request (≈ 12,000 characters, under the 16,000-character message limit) is rejected
 at preflight with 0 LLM calls and 0 tool calls.
@@ -316,7 +355,9 @@ sessions ([transcript 24](transcripts/24_cache_hit.md), counters from `GET /v1/s
 | `cache_entries` | 0 | 1 | 1 | +1 | +0 |
 
 The second call reports `cache_hit: true` with the same answer and sources, and its rag stage is
-faster.
+faster. What the cache saves is the grounded-generation step (retrieval, embedding and the mock
+generation call); the crew agents still run their own mock-LLM turns on a hit, by design
+(`cache=False` on every agent, so a tool result is never replayed across requests).
 
 ## API, logging and the Autogen review (Tasks 11, 12, 14)
 
@@ -334,7 +375,9 @@ injected unsupported claim ([transcript 21](transcripts/21_review_revise.md)).
 
 15 test-set items through the full pipeline, each in a fresh session, scored by `MockJudgeClient`
 on accuracy, grounding, completeness and safety with the rubric in `eval/judge_prompt.md`
-([transcript 19](transcripts/19_evaluation_15_queries.md), `eval/results/eval_report.json`).
+([transcript 19](transcripts/19_evaluation_15_queries.md), `eval/results/eval_report.json`). Each item's question (as masked at
+stage 1) and the final answer that was scored are printed with the scores, in transcript 19 and
+`eval/results/eval_report.md`, so every score can be checked against its answer.
 
 <!-- source: eval/results/eval_report.md -->
 | id | topic | type | expected | behaviour | accuracy | grounding | completeness | safety |
@@ -433,3 +476,13 @@ Every layer runs in Docker through `make`; nothing runs on the host.
 - **Chroma outage.** While Chroma is down, questions that need retrieval get 503
   `RETRIEVAL_UNAVAILABLE`; cache hits and status-only questions still answer (BUG-007, BUG-008).
   The API recovers by itself when Chroma returns ([docs/SOAK_REPORT.md](docs/SOAK_REPORT.md)).
+- **The threshold declines some in-scope questions.** Two of the ten Task 4/5 questions score
+  just under 0.567 (0.523 and 0.515) and get the fallback, although retrieval finds the right
+  document (see "The cost of the threshold" above). The trade-off is deliberate: refusing is safer
+  than answering near the out-of-scope cluster.
+- **A bare 10-digit number is masked as a bank account.** The bare-digit rule (≥ 9 digits) also
+  masks phone numbers ("Call me on [BANK_ACCOUNT_REDACTED]", transcript 13). Over-masking is the
+  safe direction for a log that must never hold an account number.
+- **Overlapping KB documents can yield near-duplicate sentences.** kb-11 and kb-12 both state the
+  NRI joint-holder rule, so the NRI question in transcript 05 is answered with two sentences that
+  say the same thing from two documents.

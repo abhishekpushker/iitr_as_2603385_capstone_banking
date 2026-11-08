@@ -42,7 +42,7 @@ Before any LLM call, `BudgetPolicy.preflight` projects the request's worst case:
 `BUDGET_EXCEEDED`, zero LLM calls) if the projection exceeds `BUDGET_MAX_TOKENS` or its cost
 exceeds `BUDGET_MAX_COST_USD`. The constants are measured by `scripts/measure_budget.py` from
 real rendered prompts and written to `config/budget.json` (generated, never hand-edited):
-overhead 1,700, max output 298, budget 18,000 tokens / $0.036. During the run, the `BudgetMeter`
+overhead 1,700, max output 241, budget 17,000 tokens / $0.034. During the run, the `BudgetMeter`
 charges every mock call. If a request overruns at runtime, it ends with `BudgetExceeded` after
 kickoff, and nothing is written to memory. The limits are ordered so that the budget, not the
 body cap or Pydantic, rejects long input: body cap 64 KiB > `MAX_MESSAGE_CHARS` 16,000 × 4 bytes
