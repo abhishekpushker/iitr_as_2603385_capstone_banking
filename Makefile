@@ -24,7 +24,7 @@ PHASE ?= $(shell ci/next_phase.sh)
 .PHONY: help init lock build up down logs index lint format typecheck \
         test-unit test-contract test-unit-contract test-integration test-e2e test-security \
         golden transcripts eval calibrate eval-chunking escalation-config budget bless pii-scan \
-        offline-proof \
+        offline-proof soak \
         gate-fast gate demo clean clean-volumes capture-crewai-fixtures image-size
 
 help: ## list targets
@@ -171,3 +171,6 @@ clean-volumes: ## down -v (fresh chroma/log volumes), keep images — the gate's
 clean: ## down -v and remove project images
 	$(COMPOSE) --profile test --profile tools --profile offline down -v --remove-orphans
 	-docker image rm credagent:runtime credagent:dev
+
+soak: build ## 15-min mixed HTTP + WS load with a chroma fault mid-run → docs/SOAK_REPORT.md (not in the gate)
+	ci/soak.sh
