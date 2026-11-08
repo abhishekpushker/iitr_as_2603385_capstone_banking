@@ -3,12 +3,12 @@
   "budget_max_tokens": 18000,
   "max_output_tokens": 298,
   "measured": {
-    "llm_calls": 125,
-    "max_actual_total_tokens": 5577,
+    "llm_calls": 210,
+    "max_actual_total_tokens": 5624,
     "max_completion_tokens": 298,
     "max_normal_projection_tokens": 14217,
-    "max_prompt_overhead_tokens": 1650,
-    "requests": 22
+    "max_prompt_overhead_tokens": 1653,
+    "requests": 37
   },
   "n_llm_calls": 7,
   "price_per_1k_tokens_usd": 0.002,
@@ -184,6 +184,141 @@
       "max_prompt_overhead_tokens": 1501,
       "projected_tokens": 14063,
       "source": "t15-groundedness"
+    },
+    {
+      "actual_tokens": 4281,
+      "input_tokens": 15,
+      "llm_calls": 6,
+      "max_completion_tokens": 173,
+      "max_prompt_overhead_tokens": 1603,
+      "projected_tokens": 14091,
+      "source": "t19-eval-E01"
+    },
+    {
+      "actual_tokens": 4197,
+      "input_tokens": 13,
+      "llm_calls": 6,
+      "max_completion_tokens": 164,
+      "max_prompt_overhead_tokens": 1594,
+      "projected_tokens": 14077,
+      "source": "t19-eval-E02"
+    },
+    {
+      "actual_tokens": 4240,
+      "input_tokens": 18,
+      "llm_calls": 6,
+      "max_completion_tokens": 165,
+      "max_prompt_overhead_tokens": 1596,
+      "projected_tokens": 14112,
+      "source": "t19-eval-E03"
+    },
+    {
+      "actual_tokens": 3765,
+      "input_tokens": 13,
+      "llm_calls": 6,
+      "max_completion_tokens": 97,
+      "max_prompt_overhead_tokens": 1528,
+      "projected_tokens": 14077,
+      "source": "t19-eval-E04"
+    },
+    {
+      "actual_tokens": 4210,
+      "input_tokens": 22,
+      "llm_calls": 6,
+      "max_completion_tokens": 156,
+      "max_prompt_overhead_tokens": 1587,
+      "projected_tokens": 14140,
+      "source": "t19-eval-E05"
+    },
+    {
+      "actual_tokens": 4190,
+      "input_tokens": 18,
+      "llm_calls": 6,
+      "max_completion_tokens": 159,
+      "max_prompt_overhead_tokens": 1590,
+      "projected_tokens": 14112,
+      "source": "t19-eval-E06"
+    },
+    {
+      "actual_tokens": 4325,
+      "input_tokens": 11,
+      "llm_calls": 6,
+      "max_completion_tokens": 188,
+      "max_prompt_overhead_tokens": 1613,
+      "projected_tokens": 14063,
+      "source": "t19-eval-E07"
+    },
+    {
+      "actual_tokens": 4493,
+      "input_tokens": 21,
+      "llm_calls": 6,
+      "max_completion_tokens": 211,
+      "max_prompt_overhead_tokens": 1622,
+      "projected_tokens": 14133,
+      "source": "t19-eval-E08"
+    },
+    {
+      "actual_tokens": 4248,
+      "input_tokens": 18,
+      "llm_calls": 6,
+      "max_completion_tokens": 165,
+      "max_prompt_overhead_tokens": 1596,
+      "projected_tokens": 14112,
+      "source": "t19-eval-E09"
+    },
+    {
+      "actual_tokens": 4289,
+      "input_tokens": 11,
+      "llm_calls": 6,
+      "max_completion_tokens": 180,
+      "max_prompt_overhead_tokens": 1608,
+      "projected_tokens": 14063,
+      "source": "t19-eval-E10"
+    },
+    {
+      "actual_tokens": 4090,
+      "input_tokens": 14,
+      "llm_calls": 6,
+      "max_completion_tokens": 150,
+      "max_prompt_overhead_tokens": 1581,
+      "projected_tokens": 14084,
+      "source": "t19-eval-E11"
+    },
+    {
+      "actual_tokens": 3878,
+      "input_tokens": 13,
+      "llm_calls": 6,
+      "max_completion_tokens": 110,
+      "max_prompt_overhead_tokens": 1541,
+      "projected_tokens": 14077,
+      "source": "t19-eval-E12"
+    },
+    {
+      "actual_tokens": 3646,
+      "input_tokens": 8,
+      "llm_calls": 6,
+      "max_completion_tokens": 94,
+      "max_prompt_overhead_tokens": 1502,
+      "projected_tokens": 14042,
+      "source": "t19-eval-E13"
+    },
+    {
+      "actual_tokens": 0,
+      "input_tokens": 19,
+      "llm_calls": 0,
+      "max_completion_tokens": 0,
+      "max_prompt_overhead_tokens": 0,
+      "projected_tokens": 14119,
+      "source": "t19-eval-E14"
+    },
+    {
+      "actual_tokens": 5624,
+      "input_tokens": 24,
+      "llm_calls": 7,
+      "max_completion_tokens": 296,
+      "max_prompt_overhead_tokens": 1653,
+      "projected_tokens": 14154,
+      "source": "t19-eval-E15"
     },
     {
       "actual_tokens": 3974,

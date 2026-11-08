@@ -86,7 +86,7 @@
           "expected_doc_id": "kb-11-joint-accounts",
           "query": "How many holders can a joint account have?",
           "top1_doc_id": "kb-11-joint-accounts",
-          "top1_similarity": 0.8608
+          "top1_similarity": 0.8668
         },
         {
           "expected_doc_id": "kb-12-nri-eligibility",
@@ -266,7 +266,7 @@
   "deployed_strategy": "sentence",
   "embed_model": "all-MiniLM-L6-v2",
   "gated_strategy": "sentence",
-  "kb_version": "1981d4b5747c6aaa3f70dbd0df0bacf61f88b8b8b90ce6e972b601e843cd88ce",
+  "kb_version": "3569f96caf7caa0e492ff63d086380f25871424a7364242c10ff2906852f4fc2",
   "min_gap": 0.05,
   "schema_version": 1,
   "top_k": 3
