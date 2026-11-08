@@ -72,13 +72,20 @@ format: ## apply ruff format + safe fixes (writes to the repo; not part of the g
 typecheck: ## mypy --strict
 	$(RUN_TESTS) mypy
 
+# The repo-hygiene test reads what git tracks from artifacts/tracked-files.txt: the tests container has
+# no git, and `.git/index` is replaced atomically by host git commands, which the bind mount can
+# briefly show as missing. `>` rewrites the list in place before the container starts.
+TRACKED_LIST := mkdir -p artifacts && git ls-files > artifacts/tracked-files.txt
+
 test-unit: ## unit layer (sockets disabled)
+	@$(TRACKED_LIST)
 	$(RUN_TESTS) pytest -m unit $(SOCKET_OFF)
 
 test-contract: ## contract layer (sockets disabled)
 	$(RUN_TESTS) pytest -m contract $(SOCKET_OFF)
 
 test-unit-contract: ## unit + contract with coverage; line ≥ 90 % and branch ≥ 85 % (gate steps 3 + 9)
+	@$(TRACKED_LIST)
 	$(RUN_TESTS) sh -c 'pytest -m "unit or contract" $(SOCKET_OFF) --cov --cov-report=term-missing:skip-covered \
 	  && coverage json -q -o /tmp/coverage.json && python -m scripts.coverage_gate /tmp/coverage.json'
 
