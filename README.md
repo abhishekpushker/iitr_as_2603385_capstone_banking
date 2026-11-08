@@ -27,7 +27,8 @@ make init && make up && make demo
 `make init` copies `.env.example` to `.env` (development placeholders only). `make up` builds
 the images, indexes the knowledge base and starts `chroma` and the API on
 `http://127.0.0.1:8000` (OpenAPI docs at `/docs`). `make demo` regenerates every transcript in
-`transcripts/`.
+`transcripts/`. **Evaluators:** [docs/INSTRUCTIONS_TO_RUN.md](docs/INSTRUCTIONS_TO_RUN.md) is a
+step-by-step guide to starting the stack, using the UI and API, inspecting ChromaDB and grading.
 
 ```bash
 curl -s -X POST http://127.0.0.1:8000/v1/ask \
