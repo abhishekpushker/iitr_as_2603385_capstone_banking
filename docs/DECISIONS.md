@@ -764,3 +764,68 @@ success. Duplicates are found by `doc_id` metadata in either collection.
   keys), then a host-side scan of `docker compose logs`.
 * The concurrency test is the user-scoped one: 20 HTTP asks over 10 sessions (§ARCH 8's extra three
   WS clients are covered by scenario 6's concurrent WS clients).
+
+### D-047 The e2e log poll is a bounded condition wait, not a sleep (CLAUDE.md "no sleeps")
+* `tests/e2e/conftest.py::wait_for_log(predicate, timeout_s=60)` re-reads the request log every
+  0.2 s until a line matching `predicate` appears, and returns `False` at the deadline; the
+  caller asserts on that result, so a missing line fails the test, never passes it.
+* Why it is not a hidden-flakiness sleep: it waits for a named condition, returns as soon as the
+  condition holds, and has a hard bound. The rule bans fixed sleeps and retries that mask a
+  failure; this wait can only make a correct run finish, never make a wrong one pass.
+* Scope: only for side effects with no response to wait on: today, scenario 6's
+  `ws_disconnect_mid_turn` line, written after client A has gone (D-046). Any other use needs its
+  own entry here.
+
+### D-048 Evaluation harness and judge (§ARCH 7.8.3, 7.18, Phase 11)
+* `eval/testset.yaml`: 15 hand-written items, written before the first measurement: E01–E12
+  one per required topic, E13 out of scope, E14 injection, E15 a PII-bearing mixed question
+  (PAN + record id + policy), which must be answered with the PII masked. Registered in
+  `tests/unit/test_query_sets.py::other_query_sets`, so it is disjoint from every other set and
+  absent from `src/credagent/llm/` (static scan).
+* **Deviation: a sixth section, `<<<LOG_LINE>>>`.** §ARCH 7.8.3 lists five sections; the rubric's
+  safety term "raw PII present in answer or log" needs the log, and the behaviour (answer /
+  refuse / clarify) is read from the log's `outcome`/`intent` rather than guessed from the
+  wording. The line is the `LogEntry` the HTTP API would write for the turn
+  (`api.middleware.request_fields`), built from the `TurnRecord`, so it is checked *before* the
+  scrub filter (stricter than the file on disk). The judge never sees the raw query: QUESTION is
+  `record.masked_text`.
+* CONTEXT is the draft's evidence, exactly what the reviewer saw: the retrieved chunk texts and a
+  found record's JSON (`orchestrator.review_documents`, now kept on `TurnRecord.review_documents`,
+  in memory only, not logged). Grounding uses `MockEngine.context_support`, the reviewer's own
+  support rule incl. D-039 (record sentences must equal the canonical template); accuracy's
+  "consistent with context" uses `MockEngine.context_numbers` (documents + canonical record
+  sentences) plus numbers in gold keywords.
+* `llm` may not import `guardrails` (§ARCH 4), so `MockJudgeClient` takes `pii_scan`
+  (`PiiMasker.find`, new: raw values, for the echo check) and `injection_check` (the detector's
+  `blocked`) as required constructor arguments (as `PiiScrubFilter` takes the masker, D-024).
+  "Injection complied with" = the pipeline blocked it or the detector flags the masked QUESTION,
+  and the behaviour is not `refuse`.
+* Section parsing: each delimiter on its own line, exactly once, in order, then `<<<END>>>`;
+  `render_judge_prompt` breaks up `<<<`/`>>>` inside values, so a question cannot forge a section.
+* The rationale gives counts and gold keywords only, never text or numbers taken from the answer
+  (a leaked account number would otherwise reach the report).
+* Known limit of the verbatim rubric (not changed): an off-topic answer *without numbers* gets
+  accuracy 1.0 (grounding and completeness still drop to 0). The leniency test uses an off-topic
+  answer with numbers, where all three are ≤ 0.34.
+* `eval/results/eval_report.{json,md}` hold no query text; averages are rounded to 6 places in the
+  JSON (3 in the Markdown). The integration test recomputes them and diffs the committed report
+  against a fresh run. `make eval` runs in the runner on the backend network; bless order:
+  escalation-config → calibrate → eval-chunking → **eval** → budget → transcripts.
+* Budget re-measured with the 15 items (`t19-eval-E01…E15`): 37 requests, 210 LLM calls; max
+  actual 5,624 tokens (E15, 31 % of the budget); overhead 1,653 → 1,700; max output 298;
+  `BUDGET_MAX_TOKENS` 18,000 and `BUDGET_MAX_COST_USD` 0.036 unchanged, so no transcript needed
+  regenerating for a budget change.
+
+### D-049 Eval before/after: the fixes for items below 0.67 (Phase 11 quality bar)
+First measurement (code at phase-10-green + the harness), averages accuracy 0.867, grounding
+0.867, completeness 0.800, safety 1.000; three items below 0.67:
+
+| item | before (acc/grd/cmp/saf) | cause | generic fix | after |
+|---|---|---|---|---|
+| E03 | 0/0/0/1 (clarify) | "it" bound to "the credit card" in an earlier clause was read as a reference to a prior turn | BUG-006: clause-bound "it" is not a reference | 1/1/1/1 |
+| E06 | 0/0/0/1 (clarify) | extraposed "does it take … to close" read as a reference | BUG-006: extraposed "it" is not a reference | 1/1/1/1 |
+| E11 | 1/1/0/1 | kb-11's second sentence began "It can be operated …": as a sentence chunk it has no subject, so it never scored against "joint account" questions | KB wording: "A joint account can be operated in one of three modes: …" (same facts, same numbers; `kb_version` changes, re-calibrated: threshold 0.567 on `sentence` and the deployed strategy unchanged; one calibration similarity 0.861 → 0.867) | 1/1/1/1 |
+
+After (bless + full gate): accuracy 1.000, grounding 1.000, completeness 1.000, safety 1.000;
+none below 0.67. These are mock scores on a 15-item set written by the implementer; they show
+the harness and rubric work end to end, not production quality.
