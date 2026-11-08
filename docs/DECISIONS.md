@@ -839,3 +839,50 @@ fact cannot be accurate. Changed in `eval/judge_prompt.md`, `MockJudgeClient` an
 rubric line; test `test_judge.py::test_off_topic_answer_without_numbers_scores_accuracy_0`.
 Re-measured with `make eval`: accuracy 1.000, grounding 1.000, completeness 1.000, safety 1.000
 (unchanged; no item had completeness 0, and `eval/results/` is byte-identical).
+
+### D-051 Transcript 25: network membership comes from the host (§ARCH 11.7)
+A container cannot `docker inspect` itself, and the runner has no Docker socket (it must not).
+`ci/network_facts.sh` starts a throwaway container of `runner`, `tests` and `api-offline`, reads
+`.NetworkSettings.Networks` and each network's `.Internal`, removes it, and prints one JSON line.
+`make transcripts`, `make offline-proof` and the integration and golden layers pass it in as
+`NETWORK_FACTS` (a `Settings` field, like `GIT_SHA`). Without it, transcript 25's membership check
+fails; it is never skipped. The env-flag table reads the process environment through
+`credagent.settings.environ_snapshot()`, so scripts still read the environment only through
+`settings` (static rule). Every committed transcript changed in its header only (image id, git
+SHA, timestamp) and in normalised UUIDs, timestamps and `*_ms` values.
+
+### D-052 Soak and fault-injection method (Phase 12, verification 2–3)
+* `make soak` (`ci/soak.sh`, outside the gate) recreates `api-offline` (cold RSS, empty cache),
+  then runs `tests/soak/soak.py` in the `tests` container for 900 s: 2 HTTP workers cycling 12
+  request kinds (cached/uncached policy, status, follow-up, out-of-scope, injection, oversized →
+  413, invalid → 422, `/healthz`, `/readyz`, `/v1/stats`, session delete) and 3 WS clients
+  (status, follow-up, policy, reset per connection; every 10th connection sends an ask and closes).
+* The host samples uvicorn's `VmRSS` (PID 1 in `api-offline`) every ~10 s and, at half time,
+  stops `chroma`, probes `/readyz` and an uncached `/v1/ask` from inside the API container, waits
+  60 s, starts `chroma` and polls `/readyz` until 200 (bounded, ≤ 120 probes). It writes both to
+  `artifacts/soak/`, which the tests container reads through the repo bind mount.
+* Pass criteria: a 5xx is intended only if it is a 503 `NOT_READY`/`RETRIEVAL_UNAVAILABLE` (or a
+  `/readyz` 503) between the stop and the recovery (±2 s); RSS growth is measured from the first
+  sample after a 60 s warm-up (imports and first allocations) to the last sample; log lines are
+  matched exactly: HTTP by the `X-Trace-Id` the client sent, WS by session (the client knows how
+  many frames it sent per session, including the one before a mid-turn close).
+* The 2-minute smoke run found BUG-007 and BUG-008 (fixed test-first before the 15-minute run).
+* The committed `docs/SOAK_REPORT.md` is the 15-minute run on commit 35e671a ("+dirty" = only the
+  regenerated, uncommitted transcripts): 4,300 requests, 0 unexpected 5xx, 115 intended 503s,
+  RSS +3.84 %, 4,300/4,300 log lines, recovery 1 s after `chroma` restarted, no API restart.
+
+### D-053 README numbers are tied to the artifacts by a golden test
+`tests/golden/test_readme.py`: a README block preceded by `<!-- source: PATH -->` must be a verbatim
+copy of lines of PATH; calibration similarities, gaps and thresholds, the escalation constants,
+the budget constants and every eval score and average are parsed from the README and compared with
+`config/*.json` and `eval/results/eval_report.json`; every linked transcript, doc and test file
+must exist. A `make bless` that changes a number therefore fails the gate until the README is
+updated from the regenerated artifact.
+
+### D-054 The repo-hygiene test reads `git ls-files` written by the host
+The tests container has no git binary. Parsing `.git/index` through the bind mount failed
+intermittently (1 run in 3 here): host git commands replace the index atomically, and Docker
+Desktop's file sharing can briefly show it as missing. A retry would only hide that, so
+`make test-unit` and `test-unit-contract` write `git ls-files` to `artifacts/tracked-files.txt`
+(in place, same inode) before the container starts, and `tests/unit/test_repo_hygiene.py` reads it
+from a fixture (a collection-time read would break `make test-contract`).
