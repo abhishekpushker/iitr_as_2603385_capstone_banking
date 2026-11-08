@@ -23,8 +23,14 @@ from scripts import calibrate_threshold, eval_chunking, indexer
 
 
 @pytest.fixture(scope="module")
-def retriever() -> Retriever:
+def indexed() -> None:
+    """BUG-009: every test that measures similarities needs the KB indexed first. On a cold volume
+    (gate step 10) in random order, a test without this fixture calibrated empty collections."""
     assert indexer.main([]) == 0
+
+
+@pytest.fixture(scope="module")
+def retriever(indexed: None) -> Retriever:
     s = get_settings()
     client = connect_http(
         s.chroma_host, s.chroma_port, attempts=s.chroma_connect_attempts,
@@ -96,7 +102,10 @@ def test_script_deploys_the_winner(
     assert (config.read_text(encoding="utf-8"), report.read_text(encoding="utf-8")) == first
 
 
-def test_script_deploys_nothing_when_no_strategy_meets_the_gap(tmp_path: Path) -> None:
+def test_script_deploys_nothing_when_no_strategy_meets_the_gap(
+    tmp_path: Path, indexed: None
+) -> None:
+    """BUG-009: must pass on a cold volume when it runs first."""
     config, report = tmp_path / "retrieval.json", tmp_path / "chunking_pr.md"
     assert calibrate_threshold.main(["--out", str(config)]) == 0
     data = json.loads(config.read_text(encoding="utf-8"))
@@ -110,7 +119,8 @@ def test_script_deploys_nothing_when_no_strategy_meets_the_gap(tmp_path: Path) -
     assert not report.exists()
 
 
-def test_script_refuses_a_config_from_another_kb_version(tmp_path: Path) -> None:
+def test_script_refuses_a_config_from_another_kb_version(tmp_path: Path, indexed: None) -> None:
+    """BUG-009: must pass on a cold volume when it runs first."""
     config, report = tmp_path / "retrieval.json", tmp_path / "chunking_pr.md"
     assert calibrate_threshold.main(["--out", str(config)]) == 0
     data = json.loads(config.read_text(encoding="utf-8"))
