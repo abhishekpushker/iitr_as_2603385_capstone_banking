@@ -12,7 +12,8 @@ wins. On a tie, the higher mean top-1 similarity (rounded to 4 decimals, as stor
 `config/retrieval.json`) wins, then the fewer distinct documents retrieved per query, then the
 gated strategy. `deploy` refuses any strategy below `MIN_GAP` (`NotDeployableError`).
 
-The P/R queries are disjoint from the calibration queries (tests/unit/test_query_sets.py).
+The P/R queries are the Task 4 demo queries, and disjoint from the calibration queries
+(tests/unit/test_query_sets.py).
 """
 
 from __future__ import annotations
@@ -40,8 +41,19 @@ class PRQuery:
     relevant_doc_ids: tuple[str, ...]
 
 
-# Written before measuring and never tuned on the results (D-027). Two queries need two documents.
+# One list for Task 4 (the grounded-generation demo, transcript 05) and Task 5 (P/R, transcript
+# 06): the brief scores P/R on "the same ≥5 queries from Task 4" (D-055). Every label was written
+# before measuring and never tuned: the first five are the Task 4 demo queries with the document
+# the demo already expected, the last five the original P/R set (D-027). Two need two documents.
 PR_QUERIES: Final = (
+    PRQuery("What is the annual fee on the credit card and when is it waived?",
+            ("kb-03-credit-card-fees",)),
+    PRQuery("Within how many days must I report an unauthorised transaction for zero liability?",
+            ("kb-05-fraud-dispute",)),
+    PRQuery("Can I close my account if I still have dues?", ("kb-06-account-closure",)),
+    PRQuery("What interest rate does a personal loan carry for a credit score above 800?",
+            ("kb-07-interest-rate-slabs",)),
+    PRQuery("Is there a penalty for prepaying a home loan?", ("kb-08-prepayment-penalty",)),
     PRQuery("Can an NRI be a joint account holder?",
             ("kb-11-joint-accounts", "kb-12-nri-eligibility")),
     PRQuery("What prepayment penalty applies and what rate slab applies to a personal loan?",

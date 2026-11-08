@@ -886,3 +886,34 @@ Desktop's file sharing can briefly show it as missing. A retry would only hide t
 `make test-unit` and `test-unit-contract` write `git ls-files` to `artifacts/tracked-files.txt`
 (in place, same inode) before the container starts, and `tests/unit/test_repo_hygiene.py` reads it
 from a fixture (a collection-time read would break `make test-contract`).
+
+### D-055 One query set for the Task 4 demo and the Task 5 P/R (amends D-027; human-directed)
+The release audit found that Task 5 scored a set disjoint from the Task 4 demo, while the brief
+asks for P/R on "the same ≥5 queries from Task 4". The human chose to make the demo use the P/R
+queries (Option A). Five P/R queries alone would leave the demo with three answered in-scope
+questions (two sit below 0.567 on `kb_sentence_v1`), so `evaluation.PR_QUERIES` is now ten
+queries: the five former demo queries, each with the document the demo already expected, followed
+by the five original P/R queries. No label was written or changed after measuring.
+`make_transcripts.DEMO_IN_SCOPE` is derived from it (`tests/unit/test_query_sets.py`). Transcript
+05 shows the two below-threshold in-scope questions declining with the fallback, and checks that
+≥ 5 in-scope questions are answered. `measure_budget` no longer lists the P/R queries twice.
+
+### D-056 Grounded answers keep to the loan type the question names
+The release audit found answers padded with a rule for another product: "a Home loan" questions
+got the Personal-loan sentence first (transcript 10), and the "personal loan, score above 800"
+demo got an Auto-loan sentence. `MockEngine.generate_grounded` now skips a candidate sentence that
+names loan types (`<type> loan(s)`, from the `LoanCategory` vocabulary) none of which is the one
+type the question names. Questions naming no type, or two or more, are unchanged. This is a rule on
+the schema vocabulary, not on any query text (§ARCH 11.4). Tests:
+`tests/unit/test_generator.py` (loan-type focus).
+
+### D-057 Loan categories use the brief's exact strings
+The brief's category vocabulary is `Personal Loan`, `Home Loan`, `Auto Loan`, `Education Loan`,
+`Business Loan`; the dataset used `Personal` … `Business`. The labels are now the brief's strings
+(`dataset.CATEGORY_WEIGHTS`, `AMOUNT_RANGES_INR`, `schemas.LoanCategory`). The random draws are
+unchanged, so every count, amount, day value and flag is the same; only the label, and therefore
+the dataset sha256 and `config/escalation.json`'s `dataset_sha256`, change. `schemas.loan_type`
+("Home Loan" → "Home") gives the word used in running text, so standalone queries still read
+"… for a Home loan?" and retrieval is unchanged; status answers now read "(Home Loan)".
+Transcripts 10/11 and the API transcripts use LA-0037 (a Home Loan) for the memory chain, because
+the KB has a prepayment rule for Home loans and none for Business loans.

@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
-from credagent.llm.engine import MockEngine
+from credagent.llm.engine import MockEngine, mentioned_category
 
 ENGINE = MockEngine()
 T1 = "What is the status of application LA-0007?"
@@ -19,7 +19,7 @@ def ai(record_id: Any = None, category: Any = None, text: str = "answer") -> AIM
     return AIMessage(content=text, additional_kwargs={"record_id": record_id, "category": category})
 
 
-AFTER_T1: list[BaseMessage] = [HumanMessage(content=T1), ai("LA-0007", "Home")]
+AFTER_T1: list[BaseMessage] = [HumanMessage(content=T1), ai("LA-0007", "Home Loan")]
 
 
 def test_no_reference_passes_the_query_through() -> None:
@@ -31,7 +31,7 @@ def test_no_reference_passes_the_query_through() -> None:
 
 def test_a_named_loan_category_is_recorded() -> None:
     r = ENGINE.resolve_followup("Is there a prepayment penalty on a home loan?", [])
-    assert (r.category, r.resolved) == ("Home", False)
+    assert (r.category, r.resolved) == ("Home Loan", False)
 
 
 def test_fresh_session_reference_asks_for_clarification() -> None:
@@ -43,14 +43,14 @@ def test_fresh_session_reference_asks_for_clarification() -> None:
 def test_turn_two_resolves_the_pronoun_to_the_loan_category() -> None:
     r = ENGINE.resolve_followup(T2, AFTER_T1)
     assert r.query == "What are the eligibility criteria for a Home loan?"
-    assert (r.record_id, r.category, r.resolved, r.clarify) == (None, "Home", True, False)
+    assert (r.record_id, r.category, r.resolved, r.clarify) == (None, "Home Loan", True, False)
 
 
 def test_turn_three_uses_the_most_recent_category_even_without_a_record_id() -> None:
-    history = [*AFTER_T1, HumanMessage(content="…"), ai(None, "Home")]
+    history = [*AFTER_T1, HumanMessage(content="…"), ai(None, "Home Loan")]
     r = ENGINE.resolve_followup(T3, history)
     assert r.query == "And does a Home loan carry a prepayment penalty?"
-    assert r.category == "Home"
+    assert r.category == "Home Loan"
 
 
 @pytest.mark.parametrize(
@@ -69,13 +69,13 @@ def test_status_follow_ups_carry_the_record_id(question: str, standalone: str) -
 
 def test_status_follow_up_with_only_a_category_in_history_asks_for_the_id() -> None:
     r = ENGINE.resolve_followup(
-        "Has it been approved?", [HumanMessage(content="x"), ai(None, "Home")]
+        "Has it been approved?", [HumanMessage(content="x"), ai(None, "Home Loan")]
     )
     assert r.clarify
 
 
 def test_the_most_recent_record_wins() -> None:
-    history = [*AFTER_T1, HumanMessage(content="x"), ai("LA-0012", "Auto")]
+    history = [*AFTER_T1, HumanMessage(content="x"), ai("LA-0012", "Auto Loan")]
     r = ENGINE.resolve_followup("Does it carry a prepayment penalty?", history)
     assert r.query == "Does an Auto loan carry a prepayment penalty?"
     assert ENGINE.resolve_followup("Has it been approved?", history).record_id == "LA-0012"
@@ -83,9 +83,11 @@ def test_the_most_recent_record_wins() -> None:
 
 def test_state_is_read_only_from_ai_messages_with_valid_values() -> None:
     history: list[BaseMessage] = [
-        HumanMessage(content="x", additional_kwargs={"record_id": "LA-0001", "category": "Home"}),
+        HumanMessage(
+            content="x", additional_kwargs={"record_id": "LA-0001", "category": "Home Loan"}
+        ),
         ai("not-an-id", "Gold"),
-        ai(42, ["Home"]),
+        ai(42, ["Home Loan"]),
     ]
     assert ENGINE.resolve_followup("Has it been approved?", history).clarify
     assert ENGINE.resolve_followup(T2, history).clarify
@@ -163,3 +165,19 @@ def test_resolution_is_pure() -> None:
     first = ENGINE.resolve_followup(T2, history)
     assert ENGINE.resolve_followup(T2, history) == first
     assert history == AFTER_T1
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("What credit score do home loans need?", "Home Loan"),
+        ("Is there a prepayment penalty on an Auto loan?", "Auto Loan"),
+        ("Compare a home loan with a business loan", None),
+        ("What is the status of LA-0007?", None),
+    ],
+)
+def test_mentioned_category_maps_the_loan_word_to_the_brief_vocabulary(
+    query: str, expected: str | None
+) -> None:
+    """Running text says "home loan"; the category value is the brief's "Home Loan"."""
+    assert mentioned_category(query) == expected

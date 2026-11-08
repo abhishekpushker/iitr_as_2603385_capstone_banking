@@ -84,6 +84,7 @@ from credagent.schemas import (
     RetrievalTaskOutput,
     ReviewVerdict,
     SourceRef,
+    loan_type,
 )
 from credagent.text import (
     RECORD_ID_CANDIDATE,
@@ -169,7 +170,7 @@ def _status_sentence(app: LoanStatusFound) -> str:
         f"{app.escalation_threshold})."
     )
     return (
-        f"Application {app.record_id} ({app.category} loan) is currently {app.status}. The loan "
+        f"Application {app.record_id} ({app.category}) is currently {app.status}. The loan "
         f"amount is {format_inr(app.loan_amount_inr)} and the application was created "
         f"{_age(app.days_since_created)}. {escalation}"
     )
@@ -276,8 +277,14 @@ class MockEngine:
             return self._fallback(top1)
 
         query_tokens = set(content_tokens(query))
+        # D-056: a question about one loan type is not answered with a sentence that names only
+        # other loan types ("Fixed-rate personal loans …" does not answer a home-loan question).
+        asked = mentioned_category(query)
         scored = []
         for cand in self._candidates(chunks):
+            named = mentioned_categories(cand.text)
+            if asked is not None and named and asked not in named:
+                continue
             recall = (
                 len(query_tokens & set(content_tokens(cand.text))) / len(query_tokens)
                 if query_tokens
@@ -568,8 +575,12 @@ _EXTRAPOSED: Final = re.compile(r"\s+(?:take|takes|took|cost|costs)\b[^.?!]*?\bt
                                 re.IGNORECASE)  # fmt: skip
 LOAN_CATEGORY: Final[TypeAdapter[LoanCategory]] = TypeAdapter(LoanCategory)
 _RECORD_ID: Final = re.compile(RECORD_ID_PATTERN)
+_CATEGORY_BY_TYPE: Final[dict[str, LoanCategory]] = {
+    loan_type(c).casefold(): c for c in get_args(LoanCategory)
+}
 _CATEGORY_MENTION: Final = re.compile(
-    r"\b(" + "|".join(get_args(LoanCategory)) + r") loans?\b", re.IGNORECASE
+    r"\b(" + "|".join(loan_type(c) for c in get_args(LoanCategory)) + r") loans?\b",
+    re.IGNORECASE,
 )
 
 
@@ -586,13 +597,20 @@ class FollowUp:
     clarify: bool
 
 
+def mentioned_categories(text: str) -> frozenset[LoanCategory]:
+    """Every loan category the text names as "<type> loan(s)" ("home loans" → "Home Loan")."""
+    return frozenset(
+        _CATEGORY_BY_TYPE[m.group(1).casefold()] for m in _CATEGORY_MENTION.finditer(text)
+    )
+
+
 def mentioned_category(query: str) -> LoanCategory | None:
-    """The one loan category the query names as "<category> loan", or `None`."""
-    found = {m.group(1).capitalize() for m in _CATEGORY_MENTION.finditer(query)}
+    """The one loan category the query names as "<type> loan", or `None`."""
+    found = mentioned_categories(query)
     if len(found) != 1:
         return None
     (category,) = found
-    return LOAN_CATEGORY.validate_python(category)
+    return category
 
 
 def _history_state(history: Sequence[BaseMessage]) -> tuple[str | None, LoanCategory | None]:
@@ -614,7 +632,8 @@ def _history_state(history: Sequence[BaseMessage]) -> tuple[str | None, LoanCate
 
 
 def _loan_phrase(category: LoanCategory) -> str:
-    return f"{'an' if category[0] in 'AEIOU' else 'a'} {category} loan"
+    word = loan_type(category)
+    return f"{'an' if word[0] in 'AEIOU' else 'a'} {word} loan"
 
 
 def _bound_in_sentence(query: str, ref: re.Match[str]) -> bool:

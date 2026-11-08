@@ -129,7 +129,7 @@ def _async_chain(store: dict[str, InMemoryChatMessageHistory]) -> RunnableWithMe
             raise RuntimeError("turn failed")
         return AIMessage(
             content=f"seen={len(inputs['history'])}:{inputs['input']}:{inputs['extra']}",
-            additional_kwargs={"record_id": "LA-0007", "category": "Home"},
+            additional_kwargs={"record_id": "LA-0007", "category": "Home Loan"},
         )
 
     return RunnableWithMessageHistory(
@@ -158,7 +158,7 @@ async def test_async_path_writes_history_and_passes_extra_input_keys(
         (HumanMessage, "one"),
         (HumanMessage, "two"),
     ]
-    assert msgs[3].additional_kwargs == {"record_id": "LA-0007", "category": "Home"}
+    assert msgs[3].additional_kwargs == {"record_id": "LA-0007", "category": "Home Loan"}
 
 
 @pytest.mark.anyio

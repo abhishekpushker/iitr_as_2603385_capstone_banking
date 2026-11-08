@@ -105,10 +105,11 @@ def test_every_answer_sentence_is_verbatim_from_the_context() -> None:
 
 
 def test_the_best_scoring_sentences_are_kept_in_document_order() -> None:
-    """Sentence 2 matches the query best, sentence 1 second; both are emitted, in body order."""
+    """Sentence 2 matches the query best, sentence 1 second; both are emitted, in body order.
+    The query names no loan type, so no sentence is set aside for naming another one (D-056)."""
     chunks = sentence_chunks("kb-08", PREPAY, [0.6, 0.8, 0.6, 0.6])
     out = engine.generate_grounded(
-        "personal loans prepayment penalty first 12 EMIs", chunks, threshold=THRESHOLD
+        "loans prepayment penalty first 12 EMIs", chunks, threshold=THRESHOLD
     )
     s = split_sentences(PREPAY)
     assert out.answer == f"{s[0]} {s[1]}"
@@ -253,3 +254,40 @@ def test_generator_rejects_a_threshold_outside_cosine_range() -> None:
             FakeRetriever(RetrievalResult(chunks=(), top1_similarity=-1.0, strategy="fixed")),
             engine, strategy="fixed", threshold=1.5, top_k=3, metrics=Metrics(),
         )  # fmt: skip
+
+
+# ------------------------------------------------- loan-type focus (D-056, audit finding T4/T8)
+PRICED = (
+    "Personal loan interest ranges from 10.5% to 24% p.a. by credit score band. Auto loans are "
+    "priced at 8.9–12.5%, education loans at 9.5–13% and business loans at 14–22% p.a."
+)
+
+
+def test_a_sentence_naming_only_another_loan_type_is_not_used() -> None:
+    """A Home-loan question is not answered with the Personal- or Auto-loan rule."""
+    chunks = sentence_chunks("kb-08", PREPAY, [0.7, 0.7, 0.6, 0.6])
+    out = engine.generate_grounded(
+        "Does a home loan carry a prepayment penalty?", chunks, threshold=THRESHOLD
+    )
+    s = split_sentences(PREPAY)
+    assert s[0] in out.answer
+    assert s[1] not in out.answer and s[3] not in out.answer
+
+
+def test_a_sentence_naming_the_asked_type_among_others_is_kept() -> None:
+    chunks = sentence_chunks("kb-07", PRICED, [0.7, 0.7])
+    out = engine.generate_grounded(
+        "What interest rate does an auto loan carry?", chunks, threshold=THRESHOLD
+    )
+    s = split_sentences(PRICED)
+    assert out.answer == s[1]
+
+
+@pytest.mark.parametrize(
+    "query",
+    ["What interest rate applies to loans?", "Compare personal loan and auto loan interest"],
+)
+def test_no_single_loan_type_in_the_query_means_no_filter(query: str) -> None:
+    chunks = sentence_chunks("kb-07", PRICED, [0.7, 0.7])
+    out = engine.generate_grounded(query, chunks, threshold=THRESHOLD)
+    assert out.answer == PRICED

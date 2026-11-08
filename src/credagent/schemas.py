@@ -15,8 +15,18 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from credagent.kb.chunking import Strategy
 
-LoanCategory = Literal["Personal", "Home", "Auto", "Education", "Business"]
+# The brief's given vocabularies, verbatim.
+LoanCategory = Literal[
+    "Personal Loan", "Home Loan", "Auto Loan", "Education Loan", "Business Loan"
+]  # fmt: skip
 LoanStatus = Literal["Submitted", "Under Review", "Approved", "Rejected", "Disbursed"]
+
+
+def loan_type(category: LoanCategory) -> str:
+    """The product word of a category ("Home Loan" → "Home"), for running text such as
+    "a Home loan" or "home loans"."""
+    return category.removesuffix(" Loan")
+
 
 # §ARCH 7.5 step 1: the answer when retrieval is below the calibrated threshold.
 FALLBACK_ANSWER: Final = "I don't know based on the available policy documents."

@@ -30,8 +30,9 @@ from credagent.pipeline.factory import Services, build_services
 from scripts.transcript_kit import Transcript
 
 MASKER = PiiMasker()
-T1: Final = "What is the status of application LA-0007?"
-T2: Final = "What are the eligibility criteria for it?"
+# The memory chain of transcripts 10/11 (a Home Loan application; see make_transcripts).
+T1: Final = "What is the status of application LA-0037?"
+T2: Final = "What credit score does it need?"
 T3: Final = "And does it carry a prepayment penalty?"
 POLICY: Final = "Is there a prepayment penalty on a floating-rate home loan?"
 CANARIES: Final = ("ABCPE1234F", "2345 6789 0123", "234567890123", "123456789012345")

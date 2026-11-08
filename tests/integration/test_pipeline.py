@@ -15,15 +15,19 @@ from credagent.memory.session import SessionStore
 from credagent.pipeline.factory import build_orchestrator
 from credagent.pipeline.orchestrator import Orchestrator, TurnRecord
 from credagent.rag import calibration as cal
+from credagent.schemas import loan_type
 from credagent.settings import get_settings
 from scripts import indexer
 
-T1 = "What is the status of application LA-0007?"
-T2 = "What are the eligibility criteria for it?"
+# A Home Loan application: the KB has a rule for both follow-ups (D-056, D-057).
+RID = "LA-0037"
+T1 = f"What is the status of application {RID}?"
+T2 = "What credit score does it need?"
 T3 = "And does it carry a prepayment penalty?"
 GROUNDEDNESS_DEMO = "What is the gold-loan late payment penalty?"  # §ARCH 7.12.3, D-026
 DEMO_MIN_MARGIN = 0.005
-CATEGORY = next(r["category"] for r in dataset.LOAN_APPLICATIONS if r["record_id"] == "LA-0007")
+CATEGORY = next(r["category"] for r in dataset.LOAN_APPLICATIONS if r["record_id"] == RID)
+WORD = loan_type(CATEGORY)
 
 
 class ListSink:
@@ -69,17 +73,17 @@ async def test_three_turn_carry_over(
     r1 = await orch.handle(T1, session)
     r2 = await orch.handle(T2, session)
     r3 = await orch.handle(T3, session)
-    article = "an" if CATEGORY[0] in "AEIOU" else "a"
-    assert (r1.intent, r1.application and r1.application.record_id) == ("status", "LA-0007")
+    article = "an" if WORD[0] in "AEIOU" else "a"
+    assert (r1.intent, r1.application and r1.application.record_id) == ("status", RID)
     assert _tools(r1) == [("lookup_agent", "check_loan_application_status")]
     for r in (r2, r3):
         assert (r.intent, r.grounded, r.refused) == ("policy", True, False), r.answer
         assert _tools(r) == [("retrieval_agent", "rag_lookup")]
     assert r2.tools_invoked[0].args == {
-        "query": f"What are the eligibility criteria for {article} {CATEGORY} loan?"
+        "query": f"What credit score does {article} {WORD} loan need?"
     }
     assert r3.tools_invoked[0].args == {
-        "query": f"And does {article} {CATEGORY} loan carry a prepayment penalty?"
+        "query": f"And does {article} {WORD} loan carry a prepayment penalty?"
     }
     assert r2.sources[0].doc_id == "kb-01-loan-eligibility"
     assert r3.sources[0].doc_id == "kb-08-prepayment-penalty"

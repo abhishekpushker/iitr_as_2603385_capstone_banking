@@ -47,6 +47,7 @@ from credagent.schemas import (
     RetrievalToolOutput,
     ReviewVerdict,
     SourceRef,
+    loan_type,
 )
 from credagent.settings import get_settings
 from credagent.text import find_record_id
@@ -360,14 +361,15 @@ async def test_blocked_injection_is_refused_without_crew_and_not_stored() -> Non
 async def test_three_turn_carry_over() -> None:
     orch, crew, _, store = make()
     category = CATEGORY["LA-0007"]
-    article = "an" if category[0] in "AEIOU" else "a"
+    word = loan_type(category)
+    article = "an" if word[0] in "AEIOU" else "a"
     r1 = await orch.handle(T1, "s1")
     r2 = await orch.handle(T2, "s1")
     r3 = await orch.handle(T3, "s1")
     assert crew.queries == [
         T1,
-        f"What are the eligibility criteria for {article} {category} loan?",
-        f"And does {article} {category} loan carry a prepayment penalty?",
+        f"What are the eligibility criteria for {article} {word} loan?",
+        f"And does {article} {word} loan carry a prepayment penalty?",
     ]
     assert (r1.intent, r2.intent, r3.intent) == ("status", "policy", "policy")
     kwargs = [m.additional_kwargs for m in store.messages("s1") if isinstance(m, AIMessage)]
@@ -408,7 +410,7 @@ async def test_blocked_turns_are_not_stored_and_cannot_steer_later_turns() -> No
     await orch.handle(T2, "s1")
     assert store.history_length("s1") == 4
     assert all("Ignore all previous" not in str(m.content) for m in store.messages("s1"))
-    assert crew.queries[-1].endswith(f"{CATEGORY['LA-0007']} loan?")
+    assert crew.queries[-1].endswith(f"{loan_type(CATEGORY['LA-0007'])} loan?")
 
 
 @pytest.mark.anyio

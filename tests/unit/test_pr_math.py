@@ -467,8 +467,9 @@ def test_deploy_refuses_a_strategy_below_the_minimum_gap() -> None:
 
 
 def test_pr_query_set_shape() -> None:
-    assert len(ev.PR_QUERIES) == 5
-    assert len({q.query for q in ev.PR_QUERIES}) == 5
+    """Task 5 scores "the same ≥5 queries from Task 4": one shared set (transcripts 05 and 06)."""
+    assert len(ev.PR_QUERIES) == 10
+    assert len({q.query for q in ev.PR_QUERIES}) == 10
     assert sum(len(q.relevant_doc_ids) == 2 for q in ev.PR_QUERIES) >= 2
     gold = {frozenset(q.relevant_doc_ids) for q in ev.PR_QUERIES}
     assert frozenset({"kb-11-joint-accounts", "kb-12-nri-eligibility"}) in gold

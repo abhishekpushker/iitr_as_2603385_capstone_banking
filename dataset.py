@@ -29,11 +29,11 @@ SEED = 2026
 N_RECORDS = 60
 
 CATEGORY_WEIGHTS: dict[str, float] = {
-    "Personal": 0.30,
-    "Home": 0.20,
-    "Auto": 0.20,
-    "Education": 0.15,
-    "Business": 0.15,
+    "Personal Loan": 0.30,
+    "Home Loan": 0.20,
+    "Auto Loan": 0.20,
+    "Education Loan": 0.15,
+    "Business Loan": 0.15,
 }
 STATUS_WEIGHTS: dict[str, float] = {
     "Submitted": 0.20,
@@ -44,11 +44,11 @@ STATUS_WEIGHTS: dict[str, float] = {
 }
 # Inclusive (min, max) in rupees; both ends are multiples of AMOUNT_ROUNDING_INR.
 AMOUNT_RANGES_INR: dict[str, tuple[int, int]] = {
-    "Personal": (50_000, 4_000_000),  # ₹50,000 – ₹40,00,000
-    "Home": (1_000_000, 20_000_000),  # ₹10,00,000 – ₹2,00,00,000
-    "Auto": (200_000, 3_000_000),  # ₹2,00,000 – ₹30,00,000
-    "Education": (100_000, 7_500_000),  # ₹1,00,000 – ₹75,00,000
-    "Business": (500_000, 10_000_000),  # ₹5,00,000 – ₹1,00,00,000
+    "Personal Loan": (50_000, 4_000_000),  # ₹50,000 – ₹40,00,000
+    "Home Loan": (1_000_000, 20_000_000),  # ₹10,00,000 – ₹2,00,00,000
+    "Auto Loan": (200_000, 3_000_000),  # ₹2,00,000 – ₹30,00,000
+    "Education Loan": (100_000, 7_500_000),  # ₹1,00,000 – ₹75,00,000
+    "Business Loan": (500_000, 10_000_000),  # ₹5,00,000 – ₹1,00,00,000
 }
 AMOUNT_ROUNDING_INR = 5_000
 FRAUD_FLAG_PROBABILITY = 0.18

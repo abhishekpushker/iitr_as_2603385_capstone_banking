@@ -20,11 +20,12 @@ from credagent.schemas import (
     RetrievalTaskOutput,
     RetrievalToolOutput,
     SourceRef,
+    loan_type,
 )
 
 SOURCE = {"doc_id": "kb-04", "chunk_id": "kb-04#s3", "similarity": 0.71}
 APP = {
-    "record_id": "LA-0007", "category": "Home", "status": "Under Review",
+    "record_id": "LA-0007", "category": "Home Loan", "status": "Under Review",
     "loan_amount_inr": 2500000, "days_since_created": 12, "flagged_for_fraud_review": False,
 }  # fmt: skip
 ESC = {"score": 0.24, "threshold": 0.5, "recommended": False}
@@ -230,3 +231,16 @@ def test_ask_response_is_strict(over: dict[str, Any]) -> None:
 
     with pytest.raises(ValidationError):
         AskResponse.model_validate(_ask(**over))
+
+
+def test_loan_categories_are_the_briefs_vocabulary_and_loan_type_strips_the_suffix() -> None:
+    from typing import get_args
+
+    from credagent.schemas import LoanCategory
+
+    assert get_args(LoanCategory) == (
+        "Personal Loan", "Home Loan", "Auto Loan", "Education Loan", "Business Loan",
+    )  # fmt: skip
+    assert [loan_type(c) for c in get_args(LoanCategory)] == [
+        "Personal", "Home", "Auto", "Education", "Business",
+    ]  # fmt: skip

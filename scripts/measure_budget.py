@@ -33,7 +33,6 @@ from credagent.governance.budget import N_LLM_CALLS, BudgetPolicy, PreflightResu
 from credagent.memory.session import SessionStore
 from credagent.pipeline.factory import build_orchestrator
 from credagent.pipeline.orchestrator import TurnRecord
-from credagent.rag import evaluation
 from credagent.settings import get_settings
 from scripts import make_transcripts as mt
 from scripts.run_eval import load_testset
@@ -48,7 +47,6 @@ def conversations() -> tuple[tuple[str, tuple[str, ...]], ...]:
         ("t03-sample", mt.SAMPLE_QUERY),
         *((f"t05-demo-{i}", q) for i, (q, _) in enumerate(mt.DEMO_IN_SCOPE, start=1)),
         ("t05-out-of-scope", mt.DEMO_OUT_OF_SCOPE),
-        *((f"t06-pr-{i}", q.query) for i, q in enumerate(evaluation.PR_QUERIES, start=1)),
         ("t08-policy", mt.CREW_POLICY_QUERY),
         ("t09-status", mt.CREW_STATUS_QUERY),
         ("t09-mixed", mt.CREW_MIXED_QUERY),

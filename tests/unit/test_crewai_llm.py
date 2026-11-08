@@ -58,7 +58,7 @@ RAG_OUT = RetrievalToolOutput(
     grounded=True, top1_similarity=0.71, strategy="sentence", threshold=0.42,
 )  # fmt: skip
 LOOKUP_OUT = {
-    "found": True, "record_id": "LA-0007", "category": "Home", "status": "Under Review",
+    "found": True, "record_id": "LA-0007", "category": "Home Loan", "status": "Under Review",
     "loan_amount_inr": 2500000, "days_since_created": 12, "flagged_for_fraud_review": False,
     "escalation_score": 0.24, "escalation_recommended": False, "escalation_threshold": 0.5,
 }  # fmt: skip

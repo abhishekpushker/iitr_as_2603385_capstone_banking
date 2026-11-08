@@ -49,7 +49,7 @@ def rag(
 
 def found(**over: Any) -> LookupFound:
     base: dict[str, Any] = {
-        "kind": "lookup_result", "found": True, "record_id": "LA-0007", "category": "Home",
+        "kind": "lookup_result", "found": True, "record_id": "LA-0007", "category": "Home Loan",
         "status": "Under Review", "loan_amount_inr": 2500000, "days_since_created": 12,
         "flagged_for_fraud_review": False, "escalation_score": 0.24,
         "escalation_recommended": False, "escalation_threshold": 0.5,
@@ -167,7 +167,7 @@ def test_status_answer_matching_the_record_passes() -> None:
         ("₹25,00,000", "₹26,00,000"),  # amount
         ("12 days ago", "2 days ago"),  # age
         ("Under Review", "Approved"),  # status
-        ("(Home loan)", "(Auto loan)"),  # category
+        ("(Home Loan)", "(Auto Loan)"),  # category
         ("Application LA-0007", "Application LA-0008"),  # record id
         ("score 0.24", "score 0.42"),  # escalation score
     ],

@@ -45,7 +45,7 @@ SKIPPED = RetrievalTaskOutput(kind="retrieval_result", rag=None)
 
 def found(**over: Any) -> LookupFound:
     base: dict[str, Any] = {
-        "kind": "lookup_result", "found": True, "record_id": "LA-0007", "category": "Home",
+        "kind": "lookup_result", "found": True, "record_id": "LA-0007", "category": "Home Loan",
         "status": "Under Review", "loan_amount_inr": 2500000, "days_since_created": 12,
         "flagged_for_fraud_review": False, "escalation_score": 0.24,
         "escalation_recommended": False, "escalation_threshold": 0.5,
@@ -138,7 +138,7 @@ def test_status_found() -> None:
         0.24, 0.5, False
     )  # fmt: skip
     assert r.answer == (
-        "Application LA-0007 (Home loan) is currently Under Review. The loan amount is "
+        "Application LA-0007 (Home Loan) is currently Under Review. The loan amount is "
         "₹25,00,000 and the application was created 12 days ago. No escalation is needed "
         "(escalation score 0.24 < threshold 0.5)."
     )
@@ -189,7 +189,7 @@ def test_mixed_grounded() -> None:
     r = ENGINE.compose(GROUNDED, found(), query=q, record_id="LA-0007")
     assert (r.intent, r.grounded, r.sources) == ("mixed", True, (SOURCE,))
     assert r.application is not None and r.escalation is not None
-    assert r.answer.startswith("Application LA-0007 (Home loan) is currently Under Review.")
+    assert r.answer.startswith("Application LA-0007 (Home Loan) is currently Under Review.")
     assert r.answer.endswith(GROUNDED.rag.answer)  # type: ignore[union-attr]
 
 

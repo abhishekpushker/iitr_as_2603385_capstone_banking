@@ -45,3 +45,23 @@ def test_committed_report_matches_a_fresh_run(out: Path) -> None:
     for name in ("eval_report.json", "eval_report.md"):
         committed = (REPO / "eval" / "results" / name).read_text(encoding="utf-8")
         assert (out / name).read_text(encoding="utf-8") == committed, f"run `make bless`: {name}"
+
+
+def test_every_item_shows_its_masked_question_and_final_answer(out: Path) -> None:
+    """Audit finding: scores alone cannot be checked. Each row carries the masked question and
+    the answer that was scored, in the JSON and the Markdown, with no raw PII (E15's PAN)."""
+    from credagent.guardrails.pii import PiiMasker
+
+    report = run_eval.EvalReport.model_validate_json(
+        (out / "eval_report.json").read_text(encoding="utf-8")
+    )
+    md = (out / "eval_report.md").read_text(encoding="utf-8")
+    masker = PiiMasker()
+    items = {i.id: i for i in run_eval.load_testset(get_settings().eval_testset_path)}
+    for r in report.items:
+        assert r.question_masked == masker.mask(items[r.id].query).text
+        assert r.answer
+        assert r.question_masked in md and r.answer in md
+    e15 = next(r for r in report.items if r.id == "E15")
+    assert "[PAN_REDACTED]" in e15.question_masked
+    assert not masker.find(md)

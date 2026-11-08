@@ -59,11 +59,11 @@ async def test_every_sentence_unsupported_gives_the_fallback() -> None:
 
 RECORD = found()  # LA-0007, Home, Under Review, ₹25,00,000, 12 days, score 0.24 < 0.5
 STATUS = (
-    "Application LA-0007 (Home loan) is currently Under Review. The loan amount is ₹25,00,000 and "
+    "Application LA-0007 (Home Loan) is currently Under Review. The loan amount is ₹25,00,000 and "
     "the application was created 12 days ago. No escalation is needed (escalation score 0.24 < "
     "threshold 0.5)."
 )
-WRONG_STATUS = "Application LA-0007 (Home loan) is currently Approved."
+WRONG_STATUS = "Application LA-0007 (Home Loan) is currently Approved."
 WRONG_AMOUNT = "The loan amount is ₹52,00,000 and the application was created 12 days ago."
 
 

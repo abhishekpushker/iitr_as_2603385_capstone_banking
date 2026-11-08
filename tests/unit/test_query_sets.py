@@ -79,9 +79,14 @@ def test_disjointness_check_would_catch_a_reuse(monkeypatch: pytest.MonkeyPatch)
         assert_calibration_disjoint()
 
 
-def test_demo_set_has_five_in_scope_and_one_out_of_scope() -> None:
-    assert len(make_transcripts.DEMO_IN_SCOPE) == 5
-    assert len({q for q, _ in make_transcripts.DEMO_IN_SCOPE}) == 5
+def test_demo_set_is_the_pr_set_plus_one_out_of_scope() -> None:
+    """Task 5 scores "the same ≥5 queries from Task 4": the demo (transcript 05) and the P/R set
+    (transcript 06) are one list, with the same gold documents, in the same order."""
+    assert (
+        tuple((q.query, q.relevant_doc_ids) for q in evaluation.PR_QUERIES)
+        == make_transcripts.DEMO_IN_SCOPE
+    )
+    assert len(make_transcripts.DEMO_IN_SCOPE) >= 5
     assert isinstance(make_transcripts.DEMO_OUT_OF_SCOPE, str)
 
 

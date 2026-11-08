@@ -40,6 +40,7 @@ from credagent.schemas import (
     LoanStatus,
     LookupFound,
     RefusalReason,
+    loan_type,
 )
 from credagent.text import RECORD_ID_CANDIDATE, extract_numbers, normalize, split_sentences
 
@@ -58,7 +59,10 @@ def _phrases(values: Sequence[str]) -> dict[str, re.Pattern[str]]:
 
 
 _STATUSES: Final = _phrases(get_args(LoanStatus))
-_CATEGORIES: Final = _phrases(get_args(LoanCategory))
+# Keyed by category, matched on its product word: "(Home Loan)" and "home loans" both name it.
+_CATEGORIES: Final = {
+    c: re.compile(rf"\b{re.escape(normalize(loan_type(c)))}\b") for c in get_args(LoanCategory)
+}
 _ANCHOR_WORDS: Final = re.compile(r"\b(?:application|escalation|escalated)\b")
 
 

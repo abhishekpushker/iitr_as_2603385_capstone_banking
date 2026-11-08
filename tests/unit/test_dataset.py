@@ -23,7 +23,7 @@ REPO = Path(__file__).resolve().parents[2]
 
 # Pinned after the first green run of the generator (seed procedure, docs/DECISIONS.md).
 # A change here is a dataset change: regenerate transcripts and review the diff.
-GOLDEN_SHA256 = "92fd6e6696e4437ed8fefe7b2333a9700dfd46ddfcf411f1744231724d39946e"
+GOLDEN_SHA256 = "01a4304ab66ae63c78b3d740e2c075e707c31823f68c0eb8e4be1db841caa55d"
 
 FIELDS = (
     "record_id",
@@ -33,7 +33,7 @@ FIELDS = (
     "days_since_created",
     "flagged_for_fraud_review",
 )
-CATEGORIES = ("Personal", "Home", "Auto", "Education", "Business")
+CATEGORIES = ("Personal Loan", "Home Loan", "Auto Loan", "Education Loan", "Business Loan")
 STATUSES = ("Submitted", "Under Review", "Approved", "Rejected", "Disbursed")
 ID_PATTERN = re.compile(r"^LA-\d{4}$")
 
@@ -56,18 +56,19 @@ def records() -> Records:
 def test_constants_match_the_architecture() -> None:
     assert dataset.N_RECORDS == 60
     assert dataset.CATEGORY_WEIGHTS == {
-        "Personal": 0.30, "Home": 0.20, "Auto": 0.20, "Education": 0.15, "Business": 0.15,
+        "Personal Loan": 0.30, "Home Loan": 0.20, "Auto Loan": 0.20, "Education Loan": 0.15,
+        "Business Loan": 0.15,
     }  # fmt: skip
     assert dataset.STATUS_WEIGHTS == {
         "Submitted": 0.20, "Under Review": 0.30, "Approved": 0.20, "Rejected": 0.15,
         "Disbursed": 0.15,
     }  # fmt: skip
     assert dataset.AMOUNT_RANGES_INR == {
-        "Personal": (50_000, 4_000_000),
-        "Home": (1_000_000, 20_000_000),
-        "Auto": (200_000, 3_000_000),
-        "Education": (100_000, 7_500_000),
-        "Business": (500_000, 10_000_000),
+        "Personal Loan": (50_000, 4_000_000),
+        "Home Loan": (1_000_000, 20_000_000),
+        "Auto Loan": (200_000, 3_000_000),
+        "Education Loan": (100_000, 7_500_000),
+        "Business Loan": (500_000, 10_000_000),
     }
     assert dataset.FRAUD_FLAG_PROBABILITY == 0.18
     assert isinstance(dataset.SEED, int)
@@ -215,9 +216,9 @@ def test_validate_flags_an_empty_dataset() -> None:
 
 
 def test_validate_flags_a_thin_category(records: Records) -> None:
-    keep = [r for r in records if r["category"] != "Auto"]
-    autos = [r for r in records if r["category"] == "Auto"][:2]
-    assert "Auto" in _problems(keep + autos)
+    keep = [r for r in records if r["category"] != "Auto Loan"]
+    autos = [r for r in records if r["category"] == "Auto Loan"][:2]
+    assert "Auto Loan" in _problems(keep + autos)
 
 
 def test_validate_flags_a_missing_status(records: Records) -> None:
