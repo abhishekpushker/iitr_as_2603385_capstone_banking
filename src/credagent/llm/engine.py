@@ -36,7 +36,9 @@ Phase 7 (memory, §ARCH 7.10):
   (BUG-006). A status-only question takes the record id
   ("Has it been approved?" → "Has application LA-0007 been approved?"); any other question takes
   the loan category ("eligibility criteria for it" → "… for a Home loan"). Nothing to resolve →
-  `clarify`. No side state: a fresh session has an empty history and so no state.
+  `clarify`, except that "my application" / "my loan" in a question that is not status-only
+  needs no earlier turn and passes through as a policy question (BUG-010). No side state: a fresh
+  session has an empty history and so no state.
 
 Phase 8 (the Autogen review, §ARCH 7.8.2):
 
@@ -421,6 +423,10 @@ class MockEngine:
             noun, rid, category = _loan_phrase(last_category), None, last_category
         elif last_id is not None:
             noun, rid, category = f"application {last_id}", last_id, None
+        elif all(_is_self_reference(m) for m in refs):
+            # BUG-010: "my loan" in a policy question needs no earlier turn; answer it as asked.
+            return FollowUp(query, None, mentioned_category(query), resolved=False,
+                            clarify=False)  # fmt: skip
         else:
             return FollowUp(query, None, None, resolved=False, clarify=True)
         return FollowUp(_rewrite(query, refs, noun), rid, category, resolved=True, clarify=False)
@@ -650,6 +656,12 @@ def _bound_in_sentence(query: str, ref: re.Match[str]) -> bool:
     return antecedent is not None and (
         _CLAUSE_BREAK.search(query, antecedent.end(), ref.start()) is not None
     )
+
+
+def _is_self_reference(ref: re.Match[str]) -> bool:
+    """ "my application" / "my loan": the asker's own loan, which need not have been mentioned in
+    an earlier turn, unlike the anaphors "it", "its", "this/that …" and "the same …" (BUG-010)."""
+    return ref["noun"] is not None and ref["noun"].casefold().startswith("my ")
 
 
 def _rewrite(query: str, refs: Sequence[re.Match[str]], noun: str) -> str:

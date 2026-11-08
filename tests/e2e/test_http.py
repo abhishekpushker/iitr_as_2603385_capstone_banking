@@ -155,3 +155,16 @@ def test_new_document_is_retrievable_in_both_collections_and_never_served_stale(
     assert after["cache_hit"] is False
     assert after["grounded"] and doc_id in {s["doc_id"] for s in after["sources"]}
     assert after["answer"] != before["answer"]
+
+
+def test_my_loan_in_a_fresh_policy_question_gets_a_policy_answer(client: httpx.Client) -> None:
+    """BUG-010: in a fresh session, "How is the EMI on my loan calculated?" was answered with
+    "Please share your application id", because "my loan" was treated like "it". It is a policy
+    question: answered from the EMI document, no lookup, no clarification."""
+    r = client.post("/v1/ask", headers=USER,
+                    json={"message": "How is the EMI on my loan calculated?"})  # fmt: skip
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert (body["intent"], body["refused"], body["grounded"]) == ("policy", False, True)
+    assert "kb-02-emi-calculation" in {s["doc_id"] for s in body["sources"]}
+    assert [t["tool"] for t in body["tools_invoked"]] == ["rag_lookup"]

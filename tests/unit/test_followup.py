@@ -181,3 +181,44 @@ def test_mentioned_category_maps_the_loan_word_to_the_brief_vocabulary(
 ) -> None:
     """Running text says "home loan"; the category value is the brief's "Home Loan"."""
     assert mentioned_category(query) == expected
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "How is the EMI on my loan calculated?",
+        "Can I foreclose or prepay my loan?",
+        "What documents does my application need for KYC?",
+    ],
+)
+def test_my_loan_in_a_fresh_policy_question_is_answered_not_clarified(question: str) -> None:
+    """BUG-010: "my loan" / "my application" names the asker's own loan, which need not have been
+    mentioned before (unlike "it" or "that loan"). With nothing in history to resolve it, a
+    policy question stays a standalone policy question instead of asking for an id."""
+    r = ENGINE.resolve_followup(question, [])
+    assert (r.query, r.record_id, r.resolved, r.clarify) == (question, None, False, False)
+
+
+@pytest.mark.parametrize(
+    "question",
+    ["What is the status of my application?", "Any update on my loan application?",
+     "Has my loan been approved?"],
+)  # fmt: skip
+def test_my_application_in_a_fresh_status_question_still_asks_for_the_id(question: str) -> None:
+    """BUG-010 guard: a status-only question about "my application" has nothing a policy document
+    could answer, so it still asks for the application id."""
+    assert ENGINE.resolve_followup(question, []).clarify
+
+
+def test_my_loan_with_an_unresolvable_pronoun_still_asks_for_clarification() -> None:
+    """BUG-010 guard: only "my …" is a self-reference; an unresolvable "its" in the same question
+    still needs an earlier turn."""
+    question = "What is its interest rate, and can I prepay my loan?"
+    assert ENGINE.resolve_followup(question, []).clarify
+
+
+def test_my_loan_after_a_lookup_still_resolves_to_that_loan_type() -> None:
+    """BUG-010 guard: with history, "my loan" keeps resolving to the loan looked up earlier."""
+    r = ENGINE.resolve_followup("How is the EMI on my loan calculated?", AFTER_T1)
+    assert r.query == "How is the EMI on a Home loan calculated?"
+    assert (r.category, r.resolved, r.clarify) == ("Home Loan", True, False)

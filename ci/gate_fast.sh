@@ -4,5 +4,6 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 echo "== lint";      make --no-print-directory lint
 echo "== typecheck"; make --no-print-directory typecheck
+echo "== chat UI (node --test)"; make --no-print-directory test-ui
 echo "== unit + contract (random order, sockets off, coverage)"
 make --no-print-directory test-unit-contract

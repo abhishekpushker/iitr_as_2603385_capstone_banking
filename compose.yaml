@@ -25,6 +25,20 @@ x-ready-check: &ready-check
   retries: 60
   start_period: 10s
 
+x-ui-env: &ui-env
+  UI_API_KEY: ${API_KEY:-dev-api-key-not-a-secret}
+
+x-ui-service: &ui-service
+  image: credagent:ui
+  read_only: true
+  tmpfs:
+    - /tmp:size=16m,mode=1777
+    - /etc/nginx/conf.d:size=1m,mode=1777  # the rendered template
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  mem_limit: 128m
+  pids_limit: 64
+
 x-runtime-build: &runtime-build
   context: .
   dockerfile: docker/Dockerfile
@@ -75,6 +89,33 @@ services:
     healthcheck: *ready-check
     depends_on:
       indexer: {condition: service_completed_successfully}
+
+  # The chat UI (D-058): http://127.0.0.1:8080. nginx serves the page and proxies an allow-list
+  # of API routes, adding the user key itself; it gets neither the .env file nor the admin key.
+  ui:
+    <<: *ui-service
+    build:
+      context: .
+      dockerfile: docker/ui.Dockerfile
+    environment:
+      <<: *ui-env
+      UI_UPSTREAM: api:8000
+    networks: [edge]
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      api: {condition: service_healthy}
+
+  ui-offline:
+    <<: *ui-service
+    pull_policy: never  # built by `ui`
+    profiles: [test, offline]
+    environment:
+      <<: *ui-env
+      UI_UPSTREAM: api-offline:8000
+    networks: [backend]
+    depends_on:
+      api-offline: {condition: service_healthy}
 
   runner:
     <<: [*hardening, *app-env]

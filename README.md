@@ -35,6 +35,32 @@ curl -s -X POST http://127.0.0.1:8000/v1/ask \
   -d '{"message": "What is the status of application LA-0007?"}'
 ```
 
+### Chat UI
+
+`make up` also starts a chat page at **http://127.0.0.1:8080** (the `ui` container, D-058). You
+type a question, it goes to `POST /v1/ask` and the reply is shown with its intent, the application
+record, the sources, the agents and tools that ran, the Autogen review verdict and the token use.
+Each conversation has its own session, so follow-ups such as "What credit score does it need?"
+use the agent's memory. The page has example questions for every path: policy, lookup, follow-up,
+PII, out of scope and injection.
+
+- **Container:** unprivileged nginx with a read-only root and no capabilities. It serves static
+  files and proxies only `POST /v1/ask`, `DELETE /v1/sessions/{id}` and `GET /readyz`. It adds
+  the user API key to each proxied request itself, so the browser never holds a key, and it never
+  gets the admin key. The page loads nothing from other origins.
+- **History:** conversations are kept in this browser's localStorage only. Each question is masked
+  before it is stored, with a JavaScript port of the server's PII rules. One shared case list
+  (`ui/tests/pii_cases.json`) is checked against both maskers, so they cannot drift apart.
+- **Summaries:** each conversation in the sidebar is summarised from the structured replies, not
+  free text: the applications looked up (latest status), the policy topics that answered it, and
+  how many questions were asked and declined. In a long conversation only the latest 6 turns are
+  shown in full; earlier turns fold into a summary card that can be expanded. The browser keeps
+  the 30 most recent conversations, each with at most 200 messages. After 55 minutes idle (the API
+  forgets a session after an hour) the page warns that follow-ups will not resolve.
+- **Tests:** `make test-ui` (node, no network) covers the masker, history, summaries and API client;
+  `tests/e2e/test_ui.py` covers the container (headers, allow-list, key injection, memory and
+  masking through the proxy).
+
 ## Offline, mock-only operation
 
 **All graded transcripts were produced with `MOCK_LLM=true`, zero API keys,
@@ -442,10 +468,11 @@ Every layer runs in Docker through `make`; nothing runs on the host.
 |---|---|---|
 | `make lint` · `make typecheck` | ruff check + format check · mypy `--strict` | — |
 | `make test-unit` | unit layer, sockets disabled | — |
+| `make test-ui` | chat UI: masker parity, history, summaries, API client (`node --test`, no network) | — |
 | `make test-contract` | library contract tests (CrewAI, Autogen, Chroma, Starlette, image) | — |
-| `make gate-fast` | lint + typecheck + unit + contract with coverage (line ≥ 90 %, branch ≥ 85 %) | — |
+| `make gate-fast` | lint + typecheck + UI tests + unit + contract with coverage (line ≥ 90 %, branch ≥ 85 %) | — |
 | `make test-integration` | real Chroma, real `kickoff()` | `chroma` (started for you) |
-| `make test-e2e` | HTTP + WS against `api-offline` | `api-offline` (started for you) |
+| `make test-e2e` | HTTP + WS against `api-offline`; the chat UI container | `api-offline`, `ui-offline` (started for you) |
 | `make test-security` | canaries, injection corpus, auth, offline probe | `api-offline` |
 | `make pii-scan` | security layer + canary scan of `docker compose logs` | `api-offline` |
 | `make golden` | regenerates every artifact into a temp dir and diffs against the committed ones (incl. this README's numbers) | `chroma`, indexer |

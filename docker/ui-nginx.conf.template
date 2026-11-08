@@ -1,0 +1,66 @@
+# The chat UI's server (D-058). Rendered at start by the image's envsubst step; only variables
+# matching NGINX_ENVSUBST_FILTER (^UI_) are replaced, so nginx's own $variables are kept.
+#
+# * Serves the static page from /usr/share/nginx/html.
+# * Proxies an allow-list of API routes under /api/ and adds the user X-API-Key itself, so the
+#   key never reaches the browser (and a key the browser sends is replaced). The admin key is
+#   never given to this container, and /v1/documents, /v1/stats, /docs and the WebSocket are
+#   not proxied.
+# * No access log: request bodies are never logged here, and URLs carry no user text.
+
+upstream credagent_api {
+    server ${UI_UPSTREAM};
+}
+
+server {
+    listen 8080;
+    server_name _;
+    server_tokens off;
+    access_log off;
+    charset utf-8;
+    root /usr/share/nginx/html;
+    client_max_body_size 64k;  # = the API's MAX_BODY_BYTES
+    expires -1;  # Cache-Control: no-cache, so a rebuilt image is picked up on reload
+
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header X-Frame-Options "DENY" always;
+
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header Connection "";
+    proxy_set_header Cookie "";
+    proxy_set_header X-API-Key "${UI_API_KEY}";
+    proxy_connect_timeout 5s;
+    proxy_read_timeout 120s;
+    proxy_send_timeout 30s;
+
+    location = /healthz {
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    location = /api/v1/ask {
+        if ($request_method != POST) { return 405; }
+        proxy_pass http://credagent_api/v1/ask;
+    }
+
+    location ~ "^/api/v1/sessions/([A-Za-z0-9_-]{8,64})$" {
+        if ($request_method != DELETE) { return 405; }
+        proxy_pass http://credagent_api/v1/sessions/$1;
+    }
+
+    location = /api/readyz {
+        if ($request_method != GET) { return 405; }
+        proxy_pass http://credagent_api/readyz;
+    }
+
+    location /api/ {
+        return 404;
+    }
+}

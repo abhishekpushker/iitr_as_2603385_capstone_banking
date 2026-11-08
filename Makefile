@@ -6,6 +6,8 @@ SHELL := /bin/bash
 
 PYTHON_IMAGE := python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
 UV_VERSION   := 0.13.7
+# The chat UI's JS tests (D-058): node 22.23.4, no network, the ui/ folder mounted read-only.
+NODE_IMAGE   := node:22-alpine@sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202
 
 HOST_UID := $(shell id -u)
 HOST_GID := $(shell id -g)
@@ -22,7 +24,7 @@ SOCKET_OFF := --disable-socket --allow-unix-socket --allow-hosts=chroma,api-offl
 PHASE ?= $(shell ci/next_phase.sh)
 
 .PHONY: help init lock build up down logs index lint format typecheck \
-        test-unit test-contract test-unit-contract test-integration test-e2e test-security \
+        test-ui test-unit test-contract test-unit-contract test-integration test-e2e test-security \
         golden transcripts eval calibrate eval-chunking escalation-config budget bless pii-scan \
         offline-proof soak \
         gate-fast gate demo clean clean-volumes capture-crewai-fixtures image-size
@@ -50,7 +52,7 @@ lock: ## compile both hash-locked lockfiles (networked builder container)
 build: init ## build the runtime and dev images
 	$(COMPOSE) --profile test --profile tools build
 
-up: init ## start the default stack (chroma, indexer, api)
+up: init ## start the default stack (chroma, indexer, api, ui on http://127.0.0.1:8080)
 	$(COMPOSE) up -d --wait
 
 down: ## stop the stack (keeps volumes)
@@ -81,6 +83,10 @@ test-unit: ## unit layer (sockets disabled)
 	@$(TRACKED_LIST)
 	$(RUN_TESTS) pytest -m unit $(SOCKET_OFF)
 
+test-ui: ## chat UI unit tests (node --test, no network) — D-058
+	docker run --rm --network none --read-only --user $(HOST_UID):$(HOST_GID) \
+	  -v "$(CURDIR)/ui":/ui:ro -w /ui $(NODE_IMAGE) node --test
+
 test-contract: ## contract layer (sockets disabled)
 	$(RUN_TESTS) pytest -m contract $(SOCKET_OFF)
 
@@ -92,8 +98,8 @@ test-unit-contract: ## unit + contract with coverage; line ≥ 90 % and branch �
 test-integration: ## integration layer (chroma up)
 	ci/run_layer.sh integration chroma
 
-test-e2e: ## e2e layer (api-offline up)
-	ci/run_layer.sh e2e api-offline
+test-e2e: ## e2e layer (api-offline + ui-offline up)
+	ci/run_layer.sh e2e api-offline ui-offline
 
 test-security: ## security layer (canary, injection corpus, auth, offline) against api-offline
 	ci/run_layer.sh security api-offline
@@ -124,7 +130,7 @@ capture-crewai-fixtures: ## (re)record real CrewAI message lists into tests/fixt
 	  -v "$(CURDIR)/tests/fixtures/crewai_messages":/app/tests/fixtures/crewai_messages \
 	  tests python -m tests.contract.crewai_recorder /app/tests/fixtures/crewai_messages
 
-gate-fast: ## lint + typecheck + unit + contract (+ coverage)
+gate-fast: ## lint + typecheck + UI tests + unit + contract (+ coverage)
 	ci/gate_fast.sh
 
 gate: ## the full regression gate (§PLAN 3); log in artifacts/gate-<phase>.log

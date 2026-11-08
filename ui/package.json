@@ -1,0 +1,6 @@
+{
+  "name": "credagent-chat-ui",
+  "private": true,
+  "type": "module",
+  "description": "Static chat UI for the Cred loan-support agent; no dependencies, tests run with `node --test` (make test-ui)."
+}

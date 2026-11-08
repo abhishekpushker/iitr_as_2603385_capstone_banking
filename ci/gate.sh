@@ -15,7 +15,7 @@ echo "GATE phase ${phase} — $(git rev-parse --short HEAD)$(git diff --quiet ||
 step 1  "docker compose build";                 make --no-print-directory build
 step 2-3 "lint · typecheck · unit+contract";     ci/gate_fast.sh
 step 4  "integration";                          ci/run_layer.sh integration chroma
-step 5  "e2e";                                  ci/run_layer.sh e2e api-offline
+step 5  "e2e (incl. the chat UI)";              ci/run_layer.sh e2e api-offline ui-offline
 step 6  "security + pii-scan";                  ci/pii_scan.sh
 step 7  "golden";                               ci/run_layer.sh golden chroma indexer
 step 8  "offline proof";                        make --no-print-directory offline-proof
@@ -23,7 +23,7 @@ step 9  "coverage threshold";                   echo "enforced in step 3 (line �
 step 10 "cold volume: down -v, rerun [4]–[5]"
 make --no-print-directory clean-volumes
 ci/run_layer.sh integration chroma
-ci/run_layer.sh e2e api-offline
+ci/run_layer.sh e2e api-offline ui-offline
 make --no-print-directory down
 trap - ERR
 echo; echo "GATE phase ${phase}: GREEN"

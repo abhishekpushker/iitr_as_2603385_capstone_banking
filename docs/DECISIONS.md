@@ -917,3 +917,27 @@ the dataset sha256 and `config/escalation.json`'s `dataset_sha256`, change. `sch
 "… for a Home loan?" and retrieval is unchanged; status answers now read "(Home Loan)".
 Transcripts 10/11 and the API transcripts use LA-0037 (a Home Loan) for the memory chain, because
 the KB has a prepayment rule for Home loans and none for Business loans.
+
+### D-058 A chat UI in its own container (human-directed)
+The human asked for a chatbot-style page with conversation history and a summarisation policy,
+served from Docker, for a grader to try the agent in a browser. It is a separate `ui` service
+(`docker/ui.Dockerfile`, unprivileged nginx 1.28 pinned by digest, read-only root, no
+capabilities) on `edge` at `127.0.0.1:8080`; `ui-offline` (profiles test/offline) proxies to
+`api-offline` on `backend` for the e2e layer. The graded API, pipeline and artifacts are unchanged.
+* **No key in the browser.** Browsers cannot set headers on a WebSocket, and a key in page code
+  would be public, so nginx adds the user `X-API-Key` to proxied requests (replacing any the
+  client sends). Only `POST /v1/ask`, `DELETE /v1/sessions/{id}` and `GET /readyz` are proxied;
+  the container never receives the admin key or `.env`. The UI uses HTTP with a session id per
+  conversation (the WebSocket is not needed for memory).
+* **Mask before storing.** History lives in localStorage, so the browser masks each question
+  with a port of `PiiMasker` before storing it, and re-masks on load. `ui/tests/pii_cases.json`
+  is pinned to both maskers (`tests/unit/test_ui_pii_parity.py`, `ui/tests/pii.test.js`).
+  Session ids are `ui-` + 20 letters: no digits, so the server's masker can never alter one.
+* **Summaries come from structure, not text.** Applications (latest status, escalation), topics
+  from cited doc ids, and question/decline counts; no model call. Display folds all but the last
+  6 turns into a summary card; retention is 30 conversations × 200 messages; after 55 min idle
+  (API TTL 3600 s) the page warns that follow-ups will not resolve.
+* **Tests.** `make test-ui` runs `node --test` in `node:22-alpine` (pinned, `--network none`,
+  read-only) and is part of `gate-fast`; `tests/e2e/test_ui.py` checks headers (CSP, nosniff,
+  no-referrer), the allow-list, key injection, the body cap, memory and masking via the proxy.
+  `pii-scan` also scans the ui containers' logs (nginx access log is off).

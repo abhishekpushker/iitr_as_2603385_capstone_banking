@@ -9,7 +9,7 @@ canaries=("ABCPE1234F" "2345 6789 0123" "234567890123" "123456789012345")  # = t
 
 ci/run_layer.sh security api-offline
 
-logs=$(docker compose --profile test --profile tools logs --no-color api-offline api indexer)
+logs=$(docker compose --profile test --profile tools logs --no-color api-offline api indexer ui-offline ui)
 lines=$(printf '%s\n' "$logs" | wc -l | tr -d ' ')
 leaked=0
 for c in "${canaries[@]}"; do
