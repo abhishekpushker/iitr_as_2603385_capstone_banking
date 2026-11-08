@@ -73,7 +73,7 @@ from credagent.schemas import (
     LoanStatus,
     ReviewVerdict,
 )
-from credagent.settings import Settings, get_settings
+from credagent.settings import Settings, environ_snapshot, get_settings
 from credagent.tools import escalation as esc
 from credagent.tools.acl import LeastAutonomyViolation, audit_crew
 from credagent.tools.lookup_tool import LoanStatusTool
@@ -2277,6 +2277,75 @@ def evaluation_15_queries(t: Transcript) -> None:
                 for r in edges if r.type == "pii"))  # fmt: skip
 
 
+# ------------------------------------------------------------------ 25: offline proof
+# §ARCH 5: the values the image sets (Dockerfile ENV) and `Settings` enforces.
+OFFLINE_ENV = {
+    "MOCK_LLM": "true", "LLM_PROVIDER": "mock", "CREWAI_DISABLE_TELEMETRY": "true",
+    "OTEL_SDK_DISABLED": "true", "CREWAI_TRACING_ENABLED": "false",
+    "ANONYMIZED_TELEMETRY": "False", "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
+    "HF_HUB_DISABLE_TELEMETRY": "1",
+}  # fmt: skip
+# Provider credentials a real LLM client would read; none may be present.
+PROVIDER_KEY = re.compile(r"(OPENAI|ANTHROPIC|GEMINI|GOOGLE|AZURE|GROQ|MISTRAL|COHERE|HF_TOKEN"
+                          r"|HUGGING_?FACE|LITELLM|SERPER|AWS_SECRET)", re.IGNORECASE)  # fmt: skip
+GRADED_SERVICES = ("runner", "tests", "api-offline")
+
+
+def offline_proof(t: Transcript) -> None:
+    from scripts import offline_probe  # noqa: PLC0415  (keeps the probe a standalone module)
+
+    probes = [offline_probe.probe_tcp(*offline_probe.TCP_TARGET),
+              offline_probe.probe_dns(offline_probe.DNS_TARGET)]  # fmt: skip
+    t.section("Egress probe (`scripts/offline_probe.py`, in this container)")
+    t.para("The generator runs on the `backend` network, like every graded script. It opens a TCP "
+           "connection to a public IP and resolves a public name; both must fail.")  # fmt: skip
+    t.table(["target", "reachable", "error"],
+            [[f"`{p.target}`", p.reachable, f"`{p.error}`"] for p in probes])  # fmt: skip
+    t.check("TCP to 1.1.1.1:443 fails", not probes[0].reachable)
+    t.check("DNS for pypi.org fails", not probes[1].reachable)
+
+    t.section("Telemetry and offline flags (environment of this container)")
+    t.para("The image sets these as `ENV`; importing `credagent` also `setdefault`s the egress "
+           "flags before CrewAI, Chroma or the HF stack load, and `Settings` refuses to start "
+           "with any other value.")  # fmt: skip
+    env = environ_snapshot()
+    seen = {name: env.get(name) for name in OFFLINE_ENV}
+    t.table(["variable", "value seen", "required (§ARCH 5)"],
+            [[f"`{k}`", f"`{v}`", f"`{OFFLINE_ENV[k]}`"] for k, v in seen.items()])  # fmt: skip
+    t.check("every flag has its required value", seen == OFFLINE_ENV)
+    t.check("`Settings` validated: `mock_llm` is true, provider `mock`",
+            t.settings.mock_llm and t.settings.llm_provider == "mock")  # fmt: skip
+    keys = sorted(k for k in env if PROVIDER_KEY.search(k))
+    t.para(f"LLM-provider credential variables in the environment: {len(keys)}.")
+    t.check("no LLM-provider API key in the environment", not keys)
+
+    t.section("Network membership (`docker inspect`, collected on the host)")
+    t.para("A container cannot inspect itself: `ci/network_facts.sh` starts a throwaway container "
+           "of each service that runs graded code, reads `.NetworkSettings.Networks` and each "
+           "network's `.Internal`, and passes the result in as `NETWORK_FACTS`.")  # fmt: skip
+    try:
+        facts = json.loads(t.settings.network_facts)
+    except json.JSONDecodeError:
+        facts = None
+    if not isinstance(facts, dict):
+        t.para("`NETWORK_FACTS` was not provided.")
+        t.check("network membership recorded from `docker inspect`", False)
+        return
+    t.table(["service", "networks", "internal"], [
+        [f"`{svc}`", ", ".join(f"`{n['name']}`" for n in facts.get(svc, [])) or "—",
+         ", ".join(str(n["internal"]) for n in facts.get(svc, [])) or "—"]
+        for svc in GRADED_SERVICES
+    ])  # fmt: skip
+    for svc in GRADED_SERVICES:
+        nets = facts.get(svc, [])
+        t.check(f"`{svc}` is attached only to internal networks",
+                bool(nets) and all(n["internal"] is True for n in nets))  # fmt: skip
+    t.para(
+        "`make offline-proof` re-runs every graded script (dataset validation, escalation "
+        "config, calibration, chunking P/R, eval, budget, all transcripts) in this network."
+    )
+
+
 GENERATORS: dict[str, tuple[str, Generator]] = {
     "01_dataset_report": ("Dataset report (Task 1)", dataset_report),
     "02_kb_inventory": ("Knowledge-base inventory (Task 2)", kb_inventory),
@@ -2315,6 +2384,8 @@ GENERATORS: dict[str, tuple[str, Generator]] = {
                           "tool (Task 15)", least_autonomy),
     "23_budget_cap": ("Governance: runtime budget cap — measured, preflight, overrun (Task 15)",
                       budget_cap),
+    "25_offline_proof": ("Offline proof: no egress, telemetry off, MOCK_LLM only (cross-cutting)",
+                         offline_proof),
 }  # fmt: skip
 GENERATORS |= transcripts_api.GENERATORS  # 16, 17, 18, 24: the API over HTTP and WS
 

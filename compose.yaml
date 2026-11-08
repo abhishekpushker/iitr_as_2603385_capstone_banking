@@ -82,6 +82,8 @@ services:
     pull_policy: never
     profiles: [tools]
     user: "${HOST_UID:-10001}:${HOST_GID:-10001}"
+    environment:
+      NETWORK_FACTS: ${NETWORK_FACTS:-}  # ci/network_facts.sh (transcript 25)
     volumes:
       - ./config:/app/config
       - ./transcripts:/app/transcripts
@@ -105,6 +107,7 @@ services:
       COVERAGE_FILE: /tmp/.coverage
       RUFF_CACHE_DIR: /tmp/.ruff_cache
       MYPY_CACHE_DIR: /tmp/.mypy_cache
+      NETWORK_FACTS: ${NETWORK_FACTS:-}  # ci/network_facts.sh (transcript 25)
     volumes:
       - .:/app:ro
       - logs:/data/logs:ro

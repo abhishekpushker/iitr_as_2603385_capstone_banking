@@ -107,7 +107,7 @@ offline-proof: ## egress probe from the backend network (+ graded scripts as the
 	  && python -m scripts.eval_chunking --config /tmp/retrieval.json --report /tmp/chunking_pr.md'
 	$(RUN_TOOLS) python -m scripts.run_eval --out-dir /tmp/eval
 	$(RUN_TOOLS) python -m scripts.measure_budget --out /tmp/budget.json
-	$(RUN_TOOLS) python -m scripts.make_transcripts --out /tmp/transcripts
+	NETWORK_FACTS="$$(ci/network_facts.sh)" $(RUN_TOOLS) python -m scripts.make_transcripts --out /tmp/transcripts
 
 image-size: ## print image sizes (recorded in docs/DECISIONS.md)
 	@docker image ls --format '{{.Repository}}:{{.Tag}}  {{.Size}}' | grep -E '^credagent:'
@@ -127,7 +127,7 @@ gate: ## the full regression gate (§PLAN 3); log in artifacts/gate-<phase>.log
 # transcripts 03+ read the index back, so `index` (which depends on build) runs first.
 # Provenance for the transcript header (§ARCH 7.19) is read after the build.
 transcripts: index ## regenerate transcripts/ in the runner (backend network only)
-	$(COMPOSE) --profile tools run --rm --no-deps -T \
+	NETWORK_FACTS="$$(ci/network_facts.sh)" $(COMPOSE) --profile tools run --rm --no-deps -T \
 	  -e GIT_SHA="$$(git rev-parse HEAD)$$(git diff --quiet HEAD -- || echo +dirty)" \
 	  -e IMAGE_ID="$$(docker image inspect --format '{{.Id}}' credagent:runtime)" \
 	  runner python -m scripts.make_transcripts
@@ -162,8 +162,8 @@ bless: ## regenerate and overwrite every committed artifact (review the diff!)
 	$(MAKE) --no-print-directory transcripts
 	@git status --short -- transcripts config eval/results
 
-demo: ## generator (lands in Phase 12)
-	@echo "make $@: not implemented yet (see docs/IMPLEMENTATION_PLAN.md §4)"; exit 1
+demo: up transcripts ## start the stack and regenerate every transcript (human-friendly walkthrough)
+	@echo "Stack is up on http://127.0.0.1:8000 (docs at /docs); transcripts are in transcripts/."
 
 clean-volumes: ## down -v (fresh chroma/log volumes), keep images — the gate's cold rerun
 	$(COMPOSE) --profile test --profile tools --profile offline down -v --remove-orphans

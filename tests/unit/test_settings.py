@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from credagent.settings import BUDGET_CONFIG_KEYS, Settings, get_settings
+from credagent.settings import BUDGET_CONFIG_KEYS, Settings, environ_snapshot, get_settings
 
 MEASURED = json.loads((Path(__file__).resolve().parents[2] / "config" / "budget.json").read_text())
 
@@ -23,7 +23,7 @@ ENV_KEYS = [
     "REQUEST_TIMEOUT_S", "CREWAI_STORAGE_DIR", "WEB_CONCURRENCY", "GIT_SHA", "IMAGE_ID",
     "EMBED_BATCH_SIZE", "KB_DIR", "CHROMA_CONNECT_ATTEMPTS", "CHROMA_BACKOFF_CAP_S",
     "COLLECTION_META", "ESCALATION_CONFIG_PATH", "BUDGET_CONFIG_PATH", "PROMPT_OVERHEAD_TOKENS",
-    "MAX_OUTPUT_TOKENS", "MAX_BODY_BYTES",
+    "MAX_OUTPUT_TOKENS", "MAX_BODY_BYTES", "NETWORK_FACTS",
 ]  # fmt: skip
 
 
@@ -81,6 +81,7 @@ DEFAULTS: dict[str, Any] = {
     "web_concurrency": None,
     "git_sha": "unknown",
     "image_id": "unknown",
+    "network_facts": "",
 }
 
 
@@ -175,3 +176,8 @@ def test_unrelated_env_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_get_settings_is_a_cached_singleton() -> None:
     assert get_settings() is get_settings()
+
+
+def test_environ_snapshot_is_the_process_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CREWAI_TRACING_ENABLED", "false")
+    assert environ_snapshot()["CREWAI_TRACING_ENABLED"] == "false"

@@ -26,4 +26,9 @@ fi
 if ((run_indexer)); then
   docker compose run --rm -T indexer
 fi
+# Layers that regenerate transcripts need transcript 25's `docker inspect` facts (host-only).
+if [[ $layer == integration || $layer == golden ]]; then
+  NETWORK_FACTS=$(ci/network_facts.sh)
+  export NETWORK_FACTS
+fi
 docker compose --profile test run --rm --no-deps -T tests pytest -m "${layer}"

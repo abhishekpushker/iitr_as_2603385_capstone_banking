@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Final, Literal, Self
@@ -88,6 +89,8 @@ class Settings(BaseSettings):
     # Provenance for transcript headers (§ARCH 7.19); passed in by `make transcripts`.
     git_sha: str = "unknown"
     image_id: str = "unknown"
+    # `docker inspect` network membership (JSON) from ci/network_facts.sh, for transcript 25.
+    network_facts: str = ""
 
     @model_validator(mode="before")
     @classmethod
@@ -116,3 +119,9 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
+
+
+def environ_snapshot() -> dict[str, str]:
+    """The process environment as evidence (transcript 25); configuration still goes through
+    `Settings`, so nothing may branch on this."""
+    return dict(os.environ)
