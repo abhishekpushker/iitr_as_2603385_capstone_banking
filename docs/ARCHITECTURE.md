@@ -552,7 +552,7 @@ Four layers (GOVERNANCE.md covers all four briefly; the brief grades Application
 - Bad auth → close with code 1008 before accept.
 - Test: client A sends a slow ask and disconnects immediately; client B, concurrently connected, completes 3 turns; `/healthz` is OK afterwards; the log has A's `ws_disconnect_mid_turn` entry and B's three request entries.
 
-**Errors** (`api/errors.py`): custom `RequestValidationError` handler that returns `VALIDATION_ERROR` with field locations and messages **but never the `input`/`ctx` values** (FastAPI echoes input by default, which would leak PII). Generic `Exception` handler → 500 `INTERNAL_ERROR` without the stack (the stack goes to the log, masked). 401 `UNAUTHORIZED` (constant-time compare via `hmac.compare_digest`), 413 `BUDGET_EXCEEDED`, 413 `PAYLOAD_TOO_LARGE` (body-size middleware, 64 KiB), 409 `DUPLICATE_DOCUMENT`, 422 `INJECTION_DETECTED` (documents only; `/ask` returns a 200 refusal), 503 `NOT_READY`, 504 `PIPELINE_TIMEOUT`. The trace id is echoed in the `X-Trace-Id` response header. An inbound `X-Trace-Id` is accepted only if it matches `^[a-f0-9-]{8,64}$`.
+**Errors** (`api/errors.py`): custom `RequestValidationError` handler that returns `VALIDATION_ERROR` with field locations and messages **but never the `input`/`ctx` values** (FastAPI echoes input by default, which would leak PII). Generic `Exception` handler → 500 `INTERNAL_ERROR` without the stack (the stack goes to the log, masked). 401 `UNAUTHORIZED` (constant-time compare via `hmac.compare_digest`), 413 `BUDGET_EXCEEDED`, 413 `PAYLOAD_TOO_LARGE` (body-size middleware, 64 KiB), 409 `DUPLICATE_DOCUMENT`, 422 `INJECTION_DETECTED` (documents only; `/ask` returns a 200 refusal), 503 `NOT_READY`, 503 `RETRIEVAL_UNAVAILABLE` (Chroma down after startup, BUG-007), 504 `PIPELINE_TIMEOUT`. The trace id is echoed in the `X-Trace-Id` response header. An inbound `X-Trace-Id` is accepted only if it matches `^[a-f0-9-]{8,64}$`.
 
 ### 7.17 Structured logging (Task 12) — `credagent/observability/logging.py`
 - Stdlib `logging` with a custom `JsonLinesFormatter` (`json.dumps(..., ensure_ascii=False, separators=(",",":"))`). Two handlers: `WatchedFileHandler(LOG_PATH)` and stdout. A `PiiScrubFilter` on both re-applies `PiiMasker` to the message and all string fields.
@@ -596,7 +596,7 @@ API keys (constant-time compare; admin key separated); request body cap; strict 
 | Failure | Detection | Behaviour | Outcome / code |
 |---|---|---|---|
 | Chroma down at startup | readiness retry | `/readyz` 503; `/v1/ask` 503 `NOT_READY` | `error` |
-| Chroma down mid-request | exception in RagTool | tool returns `{"error":"retrieval_unavailable"}` → Composer refuses → 503 | `error` |
+| Chroma down mid-request | exception in RagTool | tool returns `{"error":"retrieval_unavailable"}` → Composer refuses → 503 `RETRIEVAL_UNAVAILABLE`, turn not stored (BUG-007) | `error` |
 | Embedding model missing | startup assert | process exits non-zero (fail fast) | — |
 | Mock parse error / unexpected CrewAI layout | adapter returns error Final Answer | schema-valid refusal, `review_error`/`crew_error` logged | `error` (500 `CREW_PROTOCOL_ERROR`) |
 | Schema mismatch | `model_validate_json` | 500 `SCHEMA_VIOLATION` | `error` |

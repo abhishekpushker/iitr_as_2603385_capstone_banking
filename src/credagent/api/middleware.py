@@ -36,7 +36,7 @@ OUTCOME_BY_CODE: Final[dict[str, LogOutcome]] = {
     "UNAUTHORIZED": "unauthorized", "FORBIDDEN": "unauthorized",
     "BUDGET_EXCEEDED": "budget_rejected", "PIPELINE_TIMEOUT": "timeout",
     "INJECTION_DETECTED": "blocked_injection", "INTERNAL_ERROR": "error",
-    "SCHEMA_VIOLATION": "error", "NOT_READY": "error",
+    "SCHEMA_VIOLATION": "error", "NOT_READY": "error", "RETRIEVAL_UNAVAILABLE": "error",
 }  # fmt: skip
 
 

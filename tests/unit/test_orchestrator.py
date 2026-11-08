@@ -34,6 +34,7 @@ from credagent.pipeline.orchestrator import (
     Orchestrator,
     PipelineTimeout,
     PreflightResult,
+    RetrievalUnavailable,
     TurnRecord,
 )
 from credagent.review.team import ReviewOutcome
@@ -41,6 +42,7 @@ from credagent.schemas import (
     LOOKUP_TASK_OUTPUT,
     CrewResponse,
     LookupNotFound,
+    RagToolError,
     RetrievalTaskOutput,
     RetrievalToolOutput,
     ReviewVerdict,
@@ -76,8 +78,10 @@ class FakeCrew:
         block: threading.Event | None = None,
         raw: str | None = None,
         order: list[str] | None = None,
+        rag_down: bool = False,
     ) -> None:
         self.top1, self.charge, self.block, self.raw, self.order = top1, charge, block, raw, order
+        self.rag_down = rag_down
         self.queries: list[str] = []
         self.contexts: list[RequestContext] = []
 
@@ -93,7 +97,9 @@ class FakeCrew:
         rid = find_record_id(query)
         intent = ENGINE.classify_intent(query, rid)
         rag = None
-        if intent in {"policy", "mixed"}:
+        if intent in {"policy", "mixed"} and self.rag_down:  # the tool caught a Chroma error
+            rag = RagToolError(error="retrieval_unavailable")
+        elif intent in {"policy", "mixed"}:
             rag = RetrievalToolOutput(
                 answer=KB08, sources=(SOURCE,), grounded=True, top1_similarity=self.top1,
                 strategy="sentence", threshold=THRESHOLD,
@@ -152,7 +158,8 @@ def make(
     if sink is None:
         sink = ListSink()
     orch = Orchestrator(
-        crew_runner=crew, chunk_texts=chunk_texts, memory=ConversationMemory(store), sink=sink,
+        crew_runner=crew, chunk_texts=parts.pop("chunk_texts", chunk_texts),
+        memory=ConversationMemory(store), sink=sink,
         timeout_s=timeout_s, **parts,
     )  # fmt: skip
     return orch, crew, sink, store
@@ -438,6 +445,38 @@ async def test_timeout_raises_pipeline_timeout_and_stores_nothing() -> None:
     assert store.history_length("s1") == 0
     assert (sink.records[0].outcome, sink.records[0].error_code) == ("timeout", "PIPELINE_TIMEOUT")
     assert not store.lock("s1").locked()
+
+
+@pytest.mark.anyio
+async def test_retrieval_unavailable_raises_a_503_error_and_stores_nothing() -> None:
+    """BUG-007: with Chroma down after startup the turn ended as a 200 refusal; §ARCH 10 says the
+    request fails with 503 (outcome `error`) so the client retries, and nothing is stored."""
+    orch, _, sink, store = make(FakeCrew(rag_down=True))
+    with pytest.raises(RetrievalUnavailable):
+        await orch.handle("What is the prepayment penalty on a fixed-rate personal loan?", "s1")
+    assert store.history_length("s1") == 0
+    assert (sink.records[0].outcome, sink.records[0].error_code) == (
+        "error",
+        "RETRIEVAL_UNAVAILABLE",
+    )
+
+
+@pytest.mark.anyio
+async def test_chroma_failing_while_reading_the_chunk_texts_is_a_503_not_a_500() -> None:
+    """BUG-008: soak fault injection — the RAG answer came from the cache (or Chroma died after
+    the tool ran), then reading the chunk texts for review raised a connection error → 500."""
+
+    def chroma_down(ids: Sequence[str]) -> Mapping[str, str]:
+        raise ConnectionError("chroma unreachable")
+
+    orch, _, sink, store = make(chunk_texts=chroma_down)
+    with pytest.raises(RetrievalUnavailable):
+        await orch.handle("What is the prepayment penalty on a fixed-rate personal loan?", "s1")
+    assert store.history_length("s1") == 0
+    assert (sink.records[0].outcome, sink.records[0].error_code) == (
+        "error",
+        "RETRIEVAL_UNAVAILABLE",
+    )
 
 
 @pytest.mark.anyio

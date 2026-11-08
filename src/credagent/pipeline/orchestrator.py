@@ -17,7 +17,8 @@ from the API (Phase 10) to the agent. Every stage records its duration in `ctx.t
                 team (`AutogenReview`); skipped for refusals and clarifications, which claim
                 nothing. A failed review fails closed: agent_error refusal, `review_error` logged
  8  groundedness GroundednessGuard.check(verdict.final_answer, draft, trace, lookup)
- 9  budget_postcheck  meter.exceeded (e.g. review overran) → BudgetExceeded("runtime")
+ 9  budget_postcheck  meter.exceeded (e.g. review overran) → BudgetExceeded("runtime"); a
+                `retrieval_unavailable` final answer → RetrievalUnavailable (503, BUG-007)
 10  append      the Runnable stores HumanMessage(masked) + AIMessage(answer, {record_id,
                 category}) — only when stages 4–9 succeed
 11  response    AskResponse
@@ -27,9 +28,9 @@ from the API (Phase 10) to the agent. Every stage records its duration in `ctx.t
 Stage 3 is `governance.budget.BudgetPolicy` behind `BudgetPreflight`. Stage 12 is a
 `RequestSink`: the API passes a `RecordCollector`, and its middleware / WS loop writes the JSON
 line (`observability.logging`); scripts pass their own sink, the default is `NullSink`.
-Errors propagate as typed exceptions (`PipelineTimeout`, `BudgetExceeded`, `SchemaViolation`)
-for the API to map to 504 / 413 / 500, after the record is emitted with its outcome and error
-code.
+Errors propagate as typed exceptions (`PipelineTimeout`, `BudgetExceeded`, `RetrievalUnavailable`,
+`SchemaViolation`) for the API to map to 504 / 413 / 503 / 500, after the record is emitted
+with its outcome and error code.
 """
 
 from __future__ import annotations
@@ -91,6 +92,13 @@ class PipelineError(Exception):
 
 class PipelineTimeout(PipelineError):
     error_code = "PIPELINE_TIMEOUT"
+
+
+class RetrievalUnavailable(PipelineError):
+    """The policy documents could not be read (Chroma down after startup, §ARCH 10): a 503 the
+    client retries, not an answer, so the turn is not stored (BUG-007)."""
+
+    error_code = "RETRIEVAL_UNAVAILABLE"
 
 
 class BudgetExceeded(PipelineError):
@@ -310,7 +318,10 @@ class Orchestrator:
             )  # fmt: skip
             return self._respond(ctx, record, result)
         except PipelineError as exc:
-            record.outcome = "budget_rejected" if isinstance(exc, BudgetExceeded) else "timeout"
+            record.outcome = (
+                "budget_rejected" if isinstance(exc, BudgetExceeded)
+                else "timeout" if isinstance(exc, PipelineTimeout) else "error"
+            )  # fmt: skip
             record.error_code = exc.error_code
             raise
         except SchemaViolation:
@@ -395,6 +406,8 @@ class Orchestrator:
             self._budget_check(ctx)
 
         record.intent = final.intent
+        if final.refusal_reason == "retrieval_unavailable":
+            raise RetrievalUnavailable("the policy documents could not be read")
         holder.append(_TurnResult(final, verdict, decision))
         return AIMessage(
             content=final.answer,
@@ -424,7 +437,10 @@ class Orchestrator:
         if not isinstance(rag, RetrievalToolOutput):
             return None
         ids = [s.chunk_id for s in rag.sources]
-        texts = await anyio.to_thread.run_sync(self._chunk_texts, ids)
+        try:
+            texts = await anyio.to_thread.run_sync(self._chunk_texts, ids)
+        except Exception as exc:  # noqa: BLE001  (Chroma down after the tool ran: 503, BUG-008)
+            raise RetrievalUnavailable("the retrieved chunks could not be read") from exc
         return RetrievalTrace(
             top1_similarity=rag.top1_similarity, threshold=rag.threshold,
             contexts=tuple(texts[i] for i in ids if i in texts),

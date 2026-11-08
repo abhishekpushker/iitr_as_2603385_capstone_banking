@@ -211,6 +211,23 @@ def test_pipeline_failures_map_to_codes_without_a_stack(
         assert CANARIES[0] not in api.log_path.read_text(encoding="utf-8")
 
 
+def test_retrieval_unavailable_is_503_on_http_and_an_error_frame_on_ws(
+    tmp_settings: Settings,
+) -> None:
+    """BUG-007: Chroma down after startup → 503 `RETRIEVAL_UNAVAILABLE`, logged as `error`."""
+    policy = "What is the prepayment penalty on a fixed-rate personal loan?"
+    for api in _api(tmp_settings, build_services(FakeCrew(rag_down=True))):
+        r = api.client.post("/v1/ask", json={"message": policy}, headers=USER)
+        assert (r.status_code, r.json()["error_code"]) == (503, "RETRIEVAL_UNAVAILABLE")
+        with api.client.websocket_connect("/v1/ws/chat", headers=dict(USER)) as ws:
+            ws.receive_json()  # session frame
+            ws.send_json({"type": "ask", "message": policy})
+            frame = ws.receive_json()
+            assert (frame["type"], frame["error_code"]) == ("error", "RETRIEVAL_UNAVAILABLE")
+        lines = api.requests()
+        assert [(x["outcome"], x["status_code"]) for x in lines] == [("error", 503)] * 2
+
+
 def test_pipeline_timeout_is_504(tmp_settings: Settings) -> None:
     gate = threading.Event()
     for api in _api(tmp_settings, build_services(FakeCrew(block=gate), timeout_s=0.05)):

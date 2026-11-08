@@ -26,7 +26,8 @@ STATUS: Final[dict[str, int]] = {
     "UNAUTHORIZED": 401, "FORBIDDEN": 403, "NOT_FOUND": 404, "METHOD_NOT_ALLOWED": 405,
     "DUPLICATE_DOCUMENT": 409, "BUDGET_EXCEEDED": 413, "PAYLOAD_TOO_LARGE": 413,
     "VALIDATION_ERROR": 422, "INJECTION_DETECTED": 422, "INTERNAL_ERROR": 500,
-    "SCHEMA_VIOLATION": 500, "NOT_READY": 503, "PIPELINE_TIMEOUT": 504,
+    "SCHEMA_VIOLATION": 500, "NOT_READY": 503, "RETRIEVAL_UNAVAILABLE": 503,
+    "PIPELINE_TIMEOUT": 504,
 }  # fmt: skip
 MESSAGES: Final[dict[str, str]] = {
     "UNAUTHORIZED": "a valid X-API-Key header is required",
@@ -41,6 +42,7 @@ MESSAGES: Final[dict[str, str]] = {
     "INTERNAL_ERROR": "internal error",
     "SCHEMA_VIOLATION": "the agent produced an invalid response",
     "NOT_READY": "the service is starting; try again shortly",
+    "RETRIEVAL_UNAVAILABLE": "the policy documents are unavailable; try again shortly",
     "PIPELINE_TIMEOUT": "the request took too long",
 }
 _HTTP_CODES: Final = {404: "NOT_FOUND", 405: "METHOD_NOT_ALLOWED"}
