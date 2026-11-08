@@ -1,0 +1,24 @@
+{
+  "_about": "Shared by tests/unit/test_ui_pii_parity.py (the server's PiiMasker) and ui/tests/pii.test.js (the browser's maskPii). Both must produce `masked` from `input`, so the copy the chat UI keeps in browser storage is masked exactly like the text the pipeline sees. Values are fabricated.",
+  "cases": [
+    {"name": "pan", "input": "My PAN is ABCPE1234F.", "masked": "My PAN is [PAN_REDACTED]."},
+    {"name": "pan lower case", "input": "pan abcpe1234f ok", "masked": "pan [PAN_REDACTED] ok"},
+    {"name": "pan grouped capitals", "input": "PAN ABCPE 1234 F please", "masked": "PAN [PAN_REDACTED] please"},
+    {"name": "pan after underscore", "input": "PAN_ABCPE1234F", "masked": "PAN_[PAN_REDACTED]"},
+    {"name": "pan glued to a letter is not a pan", "input": "XABCPE1234F", "masked": "XABCPE1234F"},
+    {"name": "pan split by a zero-width space", "input": "ABCPE​1234F", "masked": "[PAN_REDACTED]"},
+    {"name": "aadhaar grouped by spaces", "input": "Aadhaar 2345 6789 0123", "masked": "Aadhaar [AADHAAR_REDACTED]"},
+    {"name": "aadhaar grouped by hyphens", "input": "Aadhaar 2345-6789-0123.", "masked": "Aadhaar [AADHAAR_REDACTED]."},
+    {"name": "aadhaar contiguous", "input": "aadhaar 234567890123", "masked": "aadhaar [AADHAAR_REDACTED]"},
+    {"name": "aadhaar in full-width digits", "input": "id ２３４５６７８９０１２３", "masked": "id [AADHAAR_REDACTED]"},
+    {"name": "bank account after a keyword", "input": "account no 123456789012345", "masked": "account no [BANK_ACCOUNT_REDACTED]"},
+    {"name": "keyword wins over contiguous aadhaar", "input": "account 234567890123", "masked": "account [BANK_ACCOUNT_REDACTED]"},
+    {"name": "a/c with a colon", "input": "a/c: 123456789", "masked": "a/c: [BANK_ACCOUNT_REDACTED]"},
+    {"name": "bare long digit run", "input": "call 9876543210", "masked": "call [BANK_ACCOUNT_REDACTED]"},
+    {"name": "very long digit run", "input": "ref 1234567890123456789012", "masked": "ref [BANK_ACCOUNT_REDACTED]"},
+    {"name": "everything at once", "input": "My PAN is ABCPE1234F, Aadhaar 2345 6789 0123 (or 234567890123), account no 123456789012345. What is the status of application LA-0007?", "masked": "My PAN is [PAN_REDACTED], Aadhaar [AADHAAR_REDACTED] (or [AADHAAR_REDACTED]), account no [BANK_ACCOUNT_REDACTED]. What is the status of application LA-0007?"},
+    {"name": "ids, amounts, rates and dates stay", "input": "LA-0007 for ₹25,00,000 at 10.5% on 2026-11-08, 12345678", "masked": "LA-0007 for ₹25,00,000 at 10.5% on 2026-11-08, 12345678"},
+    {"name": "invisible characters are removed even without pii", "input": "home‍ loan‮?", "masked": "home loan?"},
+    {"name": "masking is idempotent", "input": "[PAN_REDACTED] and [BANK_ACCOUNT_REDACTED]", "masked": "[PAN_REDACTED] and [BANK_ACCOUNT_REDACTED]"}
+  ]
+}
