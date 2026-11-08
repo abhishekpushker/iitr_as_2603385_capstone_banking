@@ -14,14 +14,15 @@ import pytest
 from credagent.cache.response_cache import normalize_query
 from credagent.rag import calibration as cal
 from credagent.rag import evaluation
+from credagent.settings import get_settings
 from scripts import make_transcripts
+from scripts.run_eval import load_testset
 
 REPO = Path(__file__).resolve().parents[2]
 LLM_DIR = REPO / "src" / "credagent" / "llm"
 
-# Queries the architecture already fixes for later phases (§ARCH 7.10, 7.12). Later phases
-# register their real sets (eval/testset.yaml in Phase 11) here; the §ARCH 7.6 P/R examples now
-# live in `evaluation.PR_QUERIES`.
+# Queries the architecture already fixes (§ARCH 7.10, 7.12). The §ARCH 7.6 P/R examples live in
+# `evaluation.PR_QUERIES`, the evaluation test set in eval/testset.yaml (§ARCH 7.18).
 RESERVED = (
     "What is the status of application LA-0007?",
     "What are the eligibility criteria for it?",
@@ -44,6 +45,9 @@ def other_query_sets(*, include_held_out: bool = True) -> dict[str, set[str]]:
         "reserved (§ARCH 7.10/7.12)": set(RESERVED),
         "P/R (§ARCH 7.6)": {q.query for q in evaluation.PR_QUERIES},
         "calibration": calibration_queries(),
+        "eval test set (§ARCH 7.18)": {
+            i.query for i in load_testset(get_settings().eval_testset_path)
+        },
     }
     if include_held_out:
         from tests.integration.test_mock_honesty import HELD_OUT

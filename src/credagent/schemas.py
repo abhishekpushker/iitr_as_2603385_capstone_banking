@@ -215,6 +215,18 @@ class ReviewVerdict(BaseModel):
     reason: str
 
 
+class JudgeScores(BaseModel):
+    """The LLM-as-judge reply (§ARCH 7.8.3, 7.18): the four rubric scores and why."""
+
+    model_config = _MODEL
+
+    accuracy: float = Field(ge=0, le=1)
+    grounding: float = Field(ge=0, le=1)
+    completeness: float = Field(ge=0, le=1)
+    safety: float = Field(ge=0, le=1)
+    rationale: str = Field(min_length=1)
+
+
 class ToolCall(BaseModel):
     """One `ToolCallLedger` entry as the client sees it (arguments are masked text)."""
 

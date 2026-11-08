@@ -77,7 +77,7 @@ from credagent.settings import Settings, get_settings
 from credagent.tools import escalation as esc
 from credagent.tools.acl import LeastAutonomyViolation, audit_crew
 from credagent.tools.lookup_tool import LoanStatusTool
-from scripts import transcripts_api, validate_dataset
+from scripts import run_eval, transcripts_api, validate_dataset
 from scripts.indexer import CollectionNames
 from scripts.transcript_kit import Transcript
 
@@ -2223,6 +2223,60 @@ def budget_cap(t: Transcript) -> None:
             and store2.history_length("transcript-23-overrun") == 0)  # fmt: skip
 
 
+# ------------------------------------------------------------------ 19 evaluation (Task 13)
+GLOSSARY_DOC = "kb-13-application-status-glossary"  # the 13th doc; not one of the 12 topics
+EVAL_DIMS = run_eval.DIMS
+
+
+def evaluation_15_queries(t: Transcript) -> None:
+    s = t.settings
+    items = run_eval.load_testset(s.eval_testset_path)
+    report = run_eval.evaluate(items, s)
+    t.para(
+        "Each of the 15 items of `eval/testset.yaml` runs through the full pipeline (masking, "
+        "injection check, budget, memory, crew, Autogen review, groundedness) in a fresh session. "
+        "`MockJudgeClient` scores the final answer with the rubric stated verbatim in "
+        "`eval/judge_prompt.md` (§ARCH 7.18). It reads the masked question, the draft's evidence "
+        "(retrieved chunks, record JSON), the answer and the request's log line, never the raw "
+        "input, and its reply is validated as `JudgeScores`. Scores are reported as measured; "
+        "query text is not printed."
+    )
+    t.section("Per-query scores")
+    t.table(["id", "topic", "type", "behaviour (expected)", *EVAL_DIMS], [
+        [r.id, ", ".join(r.topics) or "—", r.type, f"{r.behaviour} ({r.expected_behaviour})",
+         *(f"{getattr(r.scores, d):.3f}" for d in EVAL_DIMS)]
+        for r in report.items
+    ])  # fmt: skip
+    t.section("Averages")
+    t.table(["dimension", "average"],
+            [[d, f"{getattr(report.averages, d):.3f}"] for d in EVAL_DIMS])  # fmt: skip
+    t.section("Judge rationale for each edge item")
+    edges = [r for r in report.items if r.type != "in_scope"]
+    for r in edges:
+        t.para(f"**{r.id}** ({r.type}, expected {r.expected_behaviour}): {r.scores.rationale}")
+
+    required = {d.topic for d in load_kb(s.kb_dir) if d.doc_id != GLOSSARY_DOC}
+    by_type = Counter(r.type for r in edges)
+    t.check(
+        "exactly 15 items, each scored on 4 dimensions in [0, 1]",
+        len(report.items) == 15
+        and all(0 <= getattr(r.scores, d) <= 1 for r in report.items for d in EVAL_DIMS),
+    )
+    t.check("the topic union covers all 12 required KB topics",
+            {topic for r in report.items for topic in r.topics} >= required)  # fmt: skip
+    t.check(
+        "edge items: 1 out of scope, 1 injection, 1 PII-bearing query",
+        by_type == Counter({"out_of_scope": 1, "injection": 1, "pii": 1}),
+    )
+    t.check("each average equals the mean of its 15 rows (recomputed here)",
+            all(getattr(report.averages, d)
+                == round(sum(getattr(r.scores, d) for r in report.items) / 15, 6)
+                for d in EVAL_DIMS))  # fmt: skip
+    t.check("the PII-bearing query is answered with no raw PII in the answer or log (safety 1.0)",
+            all(r.behaviour == "answer" and r.scores.safety == 1.0
+                for r in edges if r.type == "pii"))  # fmt: skip
+
+
 GENERATORS: dict[str, tuple[str, Generator]] = {
     "01_dataset_report": ("Dataset report (Task 1)", dataset_report),
     "02_kb_inventory": ("Knowledge-base inventory (Task 2)", kb_inventory),
@@ -2251,6 +2305,8 @@ GENERATORS: dict[str, tuple[str, Generator]] = {
                                guardrail_injection),
     "15_guardrail_groundedness": ("Guardrail: output groundedness gate (Task 10)",
                                   guardrail_groundedness),
+    "19_evaluation_15_queries": ("Evaluation: 15 queries × 4 judge scores (Task 13)",
+                                 evaluation_15_queries),
     "20_review_approve": ("Autogen review: a supported draft is approved unchanged (Task 14)",
                           review_approve),
     "21_review_revise": ("Autogen review: an injected claim is removed (Task 14)",

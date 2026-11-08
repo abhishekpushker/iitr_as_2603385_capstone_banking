@@ -79,6 +79,9 @@ class Settings(BaseSettings):
     session_max: int = Field(default=1000, ge=1)  # §ARCH 7.10 LRU cap
     session_ttl_s: float = Field(default=3600.0, gt=0)  # §ARCH 7.10 idle TTL
     injection_corpus_path: Path = Path("/app/eval/injection_corpus.yaml")  # §ARCH 7.12.2
+    eval_testset_path: Path = Path("/app/eval/testset.yaml")  # §ARCH 7.18, Phase 11
+    judge_prompt_path: Path = Path("/app/eval/judge_prompt.md")
+    eval_results_dir: Path = Path("/app/eval/results")  # eval_report.{md,json} (generated)
     crewai_storage_dir: Path = Path("/tmp/crewai")  # noqa: S108  (tmpfs under a read-only root)
     web_concurrency: str | None = None
 

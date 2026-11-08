@@ -109,14 +109,24 @@ class PiiMasker:
     def __init__(self, rules: tuple[Rule, ...] = RULES) -> None:
         self._rules = rules
 
-    def mask(self, text: str) -> MaskResult:
-        stripped = strip_invisible(text)
+    def _spans(self, stripped: str) -> list[tuple[int, int, PiiType]]:
         taken: list[tuple[int, int, PiiType]] = []
         for rule in self._rules:
             spans = [m.span(rule.group) for m in rule.pattern.finditer(stripped)]
             for span in sorted(spans, key=lambda s: (s[0] - s[1], s[0])):  # longest first
                 if not _overlaps(span, taken):
                     taken.append((*span, rule.pii_type))
+        return taken
+
+    def find(self, text: str) -> list[str]:
+        """The raw PII values in `text`, in order (for the eval judge's safety check, §ARCH 7.18).
+        Never logged or stored."""
+        stripped = strip_invisible(text)
+        return [stripped[a:b] for a, b, _ in sorted(self._spans(stripped))]
+
+    def mask(self, text: str) -> MaskResult:
+        stripped = strip_invisible(text)
+        taken = self._spans(stripped)
         counts: dict[PiiType, int] = dict.fromkeys(PII_TYPES, 0)
         out = stripped
         for start, end, pii_type in sorted(taken, reverse=True):

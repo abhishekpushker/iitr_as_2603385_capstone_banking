@@ -121,6 +121,16 @@ class ReviewStage(Protocol):
     ) -> ReviewOutcome: ...
 
 
+def review_documents(
+    trace: RetrievalTrace | None, lookup: LookupFound | LookupNotFound | None
+) -> tuple[str, ...]:
+    """The evidence for a draft: the retrieved chunk texts and a found record's JSON."""
+    documents = [] if trace is None else list(trace.contexts)
+    if isinstance(lookup, LookupFound):
+        documents.append(lookup.model_dump_json(exclude={"kind"}))
+    return tuple(documents)
+
+
 class AutogenReview:
     """Stage 7 (§ARCH 7.13): the reviewer/editor team on the draft answer. The context is the
     retrieved chunk texts and, when there is an application record, its JSON; the reviewer
@@ -129,10 +139,7 @@ class AutogenReview:
     def context_for(
         self, query: str, trace: RetrievalTrace | None, lookup: LookupFound | LookupNotFound | None
     ) -> ReviewContext:
-        documents = [] if trace is None else list(trace.contexts)
-        if isinstance(lookup, LookupFound):
-            documents.append(lookup.model_dump_json(exclude={"kind"}))
-        return ReviewContext(question=query, documents=tuple(documents))
+        return ReviewContext(question=query, documents=review_documents(trace, lookup))
 
     async def review(
         self,
@@ -163,6 +170,7 @@ class TurnRecord:
     guard_reason: str | None = None
     top1_similarity: float | None = None
     guard_checks: tuple[SentenceCheck, ...] = ()
+    review_documents: tuple[str, ...] = ()  # the draft's evidence (chunks, record JSON); not logged
     review_approved: bool | None = None
     review_error: str | None = None  # the review failed closed (§ARCH 7.13)
     cache_hit: bool = False
@@ -361,6 +369,7 @@ class Orchestrator:
             retrieval, lookup = _task_outputs(output, draft)
         record.draft_intent = draft.intent
         trace = await self._trace(retrieval)
+        record.review_documents = review_documents(trace, lookup)
 
         verdict: ReviewVerdict | None = None
         if not (draft.refused or draft.intent == "clarify"):  # those claim nothing to review

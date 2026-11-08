@@ -120,6 +120,33 @@ def test_its_with_an_antecedent_in_the_same_sentence_is_not_a_reference(
     assert (r.query, r.resolved, r.clarify) == (question, False, False)
 
 
+@pytest.mark.parametrize("history", [[], AFTER_T1], ids=["fresh", "after-t1"])
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Which documents does the bank need, and can it accept a passport?",
+        "What does the closure fee cost and can it be refunded?",
+        "How long does it take to get a replacement debit card?",
+        "How much does it cost to issue a duplicate statement?",
+    ],
+)
+def test_it_bound_in_its_own_sentence_or_extraposed_is_not_a_reference(
+    question: str, history: list[BaseMessage]
+) -> None:
+    """BUG-006: "it" in a later clause than a noun phrase of the same sentence refers to that
+    phrase; "does it take/cost … to <verb>" is an expletive. Neither asks for clarification."""
+    r = ENGINE.resolve_followup(question, history)
+    assert (r.query, r.resolved, r.clarify) == (question, False, False)
+
+
+def test_it_without_a_clause_break_or_infinitive_is_still_a_reference() -> None:
+    """BUG-006 guard: turn 2/3 stay references; "does it cost" without a to-clause too."""
+    assert ENGINE.resolve_followup(T2, []).clarify
+    assert ENGINE.resolve_followup(T3, AFTER_T1).resolved
+    r = ENGINE.resolve_followup("Does it cost anything extra?", AFTER_T1)
+    assert r.query == "Does a Home loan cost anything extra?"
+
+
 def test_its_after_a_sentence_boundary_is_still_a_reference() -> None:
     """The antecedent search stops at the sentence boundary."""
     r = ENGINE.resolve_followup("Thanks for the answer. What is its status?", AFTER_T1)

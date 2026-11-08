@@ -105,6 +105,7 @@ offline-proof: ## egress probe from the backend network (+ graded scripts as the
 	$(RUN_TOOLS) python -m scripts.build_escalation_config --out /tmp/escalation.json
 	$(RUN_TOOLS) sh -c 'python -m scripts.calibrate_threshold --out /tmp/retrieval.json \
 	  && python -m scripts.eval_chunking --config /tmp/retrieval.json --report /tmp/chunking_pr.md'
+	$(RUN_TOOLS) python -m scripts.run_eval --out-dir /tmp/eval
 	$(RUN_TOOLS) python -m scripts.measure_budget --out /tmp/budget.json
 	$(RUN_TOOLS) python -m scripts.make_transcripts --out /tmp/transcripts
 
@@ -142,6 +143,11 @@ escalation-config: build ## P80 of days_since_created → threshold T → config
 eval-chunking: index ## P/R of both chunking strategies → eval/results/chunking_pr.md + deployed_strategy
 	$(RUN_TOOLS) python -m scripts.eval_chunking
 
+# The 15-item test set through the full pipeline, scored by MockJudgeClient (§ARCH 7.18). After
+# eval-chunking (the crew reads deployed_strategy); bless re-measures the budget after it.
+eval: index ## LLM-as-judge on eval/testset.yaml → eval/results/eval_report.{md,json}
+	$(RUN_TOOLS) python -m scripts.run_eval
+
 # The pipeline (crew + review) on every eval/demo query, with an unlimited meter → config/budget.json.
 # It runs after eval-chunking (the crew reads deployed_strategy) and before the transcripts (23).
 budget: index ## measure PROMPT_OVERHEAD_TOKENS, MAX_OUTPUT_TOKENS, the budget cap → config/budget.json
@@ -151,11 +157,12 @@ bless: ## regenerate and overwrite every committed artifact (review the diff!)
 	$(MAKE) --no-print-directory escalation-config
 	$(MAKE) --no-print-directory calibrate
 	$(MAKE) --no-print-directory eval-chunking
+	$(MAKE) --no-print-directory eval
 	$(MAKE) --no-print-directory budget
 	$(MAKE) --no-print-directory transcripts
 	@git status --short -- transcripts config eval/results
 
-eval demo: ## generators (land in Phases 10–11)
+demo: ## generator (lands in Phase 12)
 	@echo "make $@: not implemented yet (see docs/IMPLEMENTATION_PLAN.md §4)"; exit 1
 
 clean-volumes: ## down -v (fresh chroma/log volumes), keep images — the gate's cold rerun

@@ -1,9 +1,9 @@
 """Measure the budget constants (§ARCH 7.14.3) from real rendered prompts.
 `python -m scripts.measure_budget`.
 
-Every eval and demo query in the repository (the transcript and demo sets; Phase 11's test set
-joins in Phase 11) runs through the real pipeline (crew + Autogen review) with an unlimited meter
-and no preflight. From the meter's per-call log:
+Every eval and demo query in the repository (the transcript and demo sets and the 15-item
+evaluation test set, §ARCH 7.18) runs through the real pipeline (crew + Autogen review) with an
+unlimited meter and no preflight. From the meter's per-call log:
 
 * `PROMPT_OVERHEAD_TOKENS` = max over all calls of (prompt tokens − the request's input tokens),
   rounded up to the next 100;
@@ -36,6 +36,7 @@ from credagent.pipeline.orchestrator import TurnRecord
 from credagent.rag import evaluation
 from credagent.settings import get_settings
 from scripts import make_transcripts as mt
+from scripts.run_eval import load_testset
 
 UNLIMITED = 10**9
 
@@ -55,6 +56,7 @@ def conversations() -> tuple[tuple[str, tuple[str, ...]], ...]:
         ("t09-clarify", mt.CREW_CLARIFY_QUERY),
         ("t13-pii", mt.PII_PIPELINE_QUERY.format(pan=pan, aadhaar=aadhaar, account=account)),
         ("t15-groundedness", mt.GROUNDEDNESS_QUERY),
+        *((f"t19-eval-{i.id}", i.query) for i in load_testset(get_settings().eval_testset_path)),
     ]
     seen: set[str] = set()
     out: list[tuple[str, tuple[str, ...]]] = []

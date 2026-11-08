@@ -14,6 +14,7 @@ from credagent.pipeline.factory import build_orchestrator
 from credagent.pipeline.orchestrator import BudgetExceeded, Orchestrator, TurnRecord
 from credagent.settings import get_settings
 from scripts import indexer, measure_budget
+from scripts.run_eval import load_testset
 
 POLICY_QUERY = "Is there a prepayment penalty on a floating-rate home loan?"
 OVERSIZED = (POLICY_QUERY + " ") * 200  # ≈ 12,000 chars (§ARCH 7.14.3 demo)
@@ -45,6 +46,9 @@ async def test_every_measured_query_passes_preflight_and_uses_at_most_half_the_b
     orch, _, sink = built
     budget = get_settings().budget_max_tokens
     policy = BudgetPolicy()
+    measured = {q for _, queries in measure_budget.conversations() for q in queries}
+    testset = {i.query for i in load_testset(get_settings().eval_testset_path)}
+    assert testset <= measured, "every eval test-set query is measured (§ARCH 7.18)"
     for session, queries in measure_budget.conversations():
         for query in queries:
             await orch.handle(query, session, "script")

@@ -31,7 +31,9 @@ Phase 7 (memory, §ARCH 7.10):
   one") is rewritten into a standalone query from the most recent record id and loan category in
   the history's AI messages (`additional_kwargs`). A possessive "its" with a noun phrase
   before it in the same sentence ("close my account in its first year") refers to that phrase
-  and is not a reference (BUG-003). A status-only question takes the record id
+  and is not a reference (BUG-003); so is an "it" with such a phrase in an earlier clause of its
+  sentence ("the card … and can it be waived"), and an extraposed "does it take/cost … to <verb>"
+  (BUG-006). A status-only question takes the record id
   ("Has it been approved?" → "Has application LA-0007 been approved?"); any other question takes
   the loan category ("eligibility criteria for it" → "… for a Home loan"). Nothing to resolve →
   `clarify`. No side state: a fresh session has an empty history and so no state.
@@ -331,10 +333,23 @@ class MockEngine:
         ]
 
     # ------------------------------------------------------------------ review (Phase 8)
-    def review(self, draft: str, context: Sequence[str]) -> str:
+    def context_support(self, answer: str, context: Sequence[str]) -> SupportReport:
+        """The support rule against a review context: prose documents plus found-record JSON,
+        whose status sentences support only an identical sentence (D-039). Shared by the
+        reviewer and the judge (§ARCH 7.18)."""
         records, documents = _records(context)
         canonical = {s for r in records for _, s in _split(_status_sentence(r))}
-        report = self.support_report(draft, documents, exact=canonical)
+        return self.support_report(answer, documents, exact=canonical)
+
+    @staticmethod
+    def context_numbers(context: Sequence[str]) -> set[str]:
+        """Every number the context states: its documents' and its records' status sentences."""
+        records, documents = _records(context)
+        texts = [*documents, *(_status_sentence(r) for r in records)]
+        return {n for t in texts for n in extract_numbers(t)}
+
+    def review(self, draft: str, context: Sequence[str]) -> str:
+        report = self.context_support(draft, context)
         lines = [
             f"Policy compliance review: {report.supported_count} of {report.total} sentences are "
             "supported by the retrieved context."
@@ -545,6 +560,12 @@ _REFERENCE: Final = re.compile(
 # it refers to that phrase, not to an earlier turn (BUG-003).
 _ANTECEDENT: Final = re.compile(r"\b(?:my|the|a|an|this|that|your|our) [a-z]", re.IGNORECASE)
 _SENTENCE_END: Final = re.compile(r"[.?!](?:\s|$)")
+# "it" in a later clause than such a phrase ("the card … and can it be waived") refers to that
+# phrase; within one clause ("the eligibility criteria for it") it does not (BUG-006).
+_CLAUSE_BREAK: Final = re.compile(r"[,;]|\b(?:and|or|but)\b", re.IGNORECASE)
+# Extraposition: in "does it take/cost … to <verb>" the "it" stands for the to-clause (BUG-006).
+_EXTRAPOSED: Final = re.compile(r"\s+(?:take|takes|took|cost|costs)\b[^.?!]*?\bto [a-z]",
+                                re.IGNORECASE)  # fmt: skip
 LOAN_CATEGORY: Final[TypeAdapter[LoanCategory]] = TypeAdapter(LoanCategory)
 _RECORD_ID: Final = re.compile(RECORD_ID_PATTERN)
 _CATEGORY_MENTION: Final = re.compile(
@@ -597,11 +618,19 @@ def _loan_phrase(category: LoanCategory) -> str:
 
 
 def _bound_in_sentence(query: str, ref: re.Match[str]) -> bool:
-    """A possessive "its" with an antecedent noun phrase before it in its own sentence."""
-    if not ref["poss"]:
+    """A possessive "its" with an antecedent noun phrase before it in its own sentence (BUG-003);
+    an "it" with one in an earlier clause of its sentence, or an extraposed "it" (BUG-006)."""
+    if ref["noun"]:
         return False
     start = max((e.end() for e in _SENTENCE_END.finditer(query, 0, ref.start())), default=0)
-    return _ANTECEDENT.search(query, start, ref.start()) is not None
+    antecedent = _ANTECEDENT.search(query, start, ref.start())
+    if ref["poss"]:
+        return antecedent is not None
+    if _EXTRAPOSED.match(query, ref.end()):
+        return True
+    return antecedent is not None and (
+        _CLAUSE_BREAK.search(query, antecedent.end(), ref.start()) is not None
+    )
 
 
 def _rewrite(query: str, refs: Sequence[re.Match[str]], noun: str) -> str:
